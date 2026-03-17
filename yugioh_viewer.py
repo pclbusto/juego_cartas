@@ -1,6 +1,4 @@
 import os
-import json
-import sqlite3
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
@@ -9,61 +7,11 @@ gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 from gi.repository import Gtk, Adw, Gio, GLib
 
+from database import DatabaseManager
+
 DB_FILE = "yugioh.db"
 JSON_FILE = "normal_monsters.json"
 IMAGES_DIR = "images"
-
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS cards (
-            cid TEXT PRIMARY KEY,
-            type TEXT,
-            name TEXT,
-            image_name TEXT,
-            attribute TEXT,
-            level TEXT,
-            atk TEXT,
-            def TEXT,
-            text TEXT,
-            image_url TEXT
-        )
-    ''')
-    
-    # Load JSON if table is empty
-    cursor.execute("SELECT COUNT(*) FROM cards")
-    if cursor.fetchone()[0] == 0:
-        if os.path.exists(JSON_FILE):
-            with open(JSON_FILE, 'r', encoding='utf-8') as f:
-                cards = json.load(f)
-                for card in cards:
-                    cursor.execute('''
-                        INSERT INTO cards (cid, type, name, image_name, attribute, level, atk, def, text, image_url)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        card.get('cid', ''),
-                        card.get('type', ''),
-                        card.get('name', ''),
-                        card.get('image_name', ''),
-                        card.get('attribute', ''),
-                        card.get('level', ''),
-                        card.get('atk', ''),
-                        card.get('def', ''),
-                        card.get('text', ''),
-                        card.get('image_url', '')
-                    ))
-            conn.commit()
-    conn.close()
-
-def get_cards():
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM cards ORDER BY name")
-    cards = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return cards
 
 class YgoViewerWindow(Adw.ApplicationWindow):
     def __init__(self, app, cards):
@@ -233,8 +181,9 @@ class YgoApp(Adw.Application):
                          flags=Gio.ApplicationFlags.FLAGS_NONE)
         
     def do_activate(self):
-        init_db()
-        cards = get_cards()
+        db = DatabaseManager(DB_FILE)
+        db.init_db(JSON_FILE)
+        cards = db.get_cards()
         
         win = self.props.active_window
         if not win:
