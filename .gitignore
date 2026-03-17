@@ -1,0 +1,25 @@
+# Entornos virtuales
+venv/
+.venv/
+env/
+.env/
+
+# Caché de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Archivos de la base de datos y elementos generados
+yugioh.db
+images/
+*.json
+!normal_monsters.json
+
+# IDEs
+.vscode/
+.idea/
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
