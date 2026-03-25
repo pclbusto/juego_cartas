@@ -42,6 +42,25 @@ class Card(arcade.SpriteSolidColor):
         self._has_image = False
         self.hovered = False
         self.is_held = False
+
+        # ── Callbacks de eventos ───────────────────────────────────────────
+        # Asignar desde la view:
+        #   card.on_click       = lambda card: ...
+        #   card.on_right_click = lambda card: ...
+        #   card.on_drag_start  = lambda card: ...
+        #   card.on_drag        = lambda card, x, y: ...
+        #   card.on_drop        = lambda card, x, y: ...
+        self.on_click       = None
+        self.on_right_click = None
+        self.on_drag_start  = None
+        self.on_drag        = None
+        self.on_drop        = None
+
+        # Estado interno para distinguir clic vs arrastre
+        self._press_x    = None
+        self._press_y    = None
+        self._dragging   = False
+        _DRAG_THRESHOLD  = 6   # píxeles mínimos para considerar arrastre
         
         # Load local thumbnail if available
         img_name = self.card_data.get('image_name')
@@ -124,3 +143,53 @@ class Card(arcade.SpriteSolidColor):
                                            (*_BACK_LINE, 180), 1)
         arcade.draw_text("★", cx, cy, (*_BACK_LINE, 200),
                          font_size=20, anchor_x="center", anchor_y="center")
+
+    # ── Hit test ──────────────────────────────────────────────────────────────
+
+    def contains(self, x, y) -> bool:
+        return (abs(x - self.center_x) <= CW / 2 and
+                abs(y - self.center_y) <= CH / 2)
+
+    # ── Eventos — llamar desde on_mouse_press/release/drag de la view ────────
+
+    def on_mouse_press(self, x, y, button):
+        """Registra el inicio de un posible clic o arrastre."""
+        if not self.contains(x, y):
+            return False
+        if button == 1:
+            self._press_x  = x
+            self._press_y  = y
+            self._dragging = False
+            self.is_held   = True
+        elif button == 4 and self.on_right_click:
+            self.on_right_click(self)
+        return True   # consumió el evento
+
+    def on_mouse_drag(self, x, y, dx, dy):
+        """Detecta inicio de arrastre y notifica movimiento."""
+        if not self.is_held:
+            return
+        if not self._dragging:
+            dist = ((x - self._press_x) ** 2 + (y - self._press_y) ** 2) ** 0.5
+            if dist >= 6:
+                self._dragging = True
+                if self.on_drag_start:
+                    self.on_drag_start(self)
+        if self._dragging:
+            self.center_x = x
+            self.center_y = y
+            if self.on_drag:
+                self.on_drag(self, x, y)
+
+    def on_mouse_release(self, x, y, button):
+        """Al soltar: dispara on_click si no hubo arrastre, o on_drop si sí."""
+        if button != 1 or not self.is_held:
+            return
+        self.is_held = False
+        if self._dragging:
+            self._dragging = False
+            if self.on_drop:
+                self.on_drop(self, x, y)
+        else:
+            if self.on_click:
+                self.on_click(self)

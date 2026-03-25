@@ -154,6 +154,12 @@ class _SDFComponent:
         self._tex_ar     = 1.0
         self.draw_offset = (0.0, 0.0)
 
+        # Callbacks de eventos — asignar desde la view:
+        #   comp.on_click       = lambda comp: ...
+        #   comp.on_right_click = lambda comp: ...
+        self.on_click       = None
+        self.on_right_click = None
+
         if image_path:
             self._tex, self._tex_ar = _load_ctx_tex(ctx, image_path)
 
@@ -179,6 +185,16 @@ class _SDFComponent:
 
     def on_mouse_motion(self, x, y):
         self.hovered = self.contains(x, y)
+
+    def on_mouse_press(self, x, y, button):
+        """Llama on_click / on_right_click si el cursor está sobre el componente."""
+        if not self.contains(x, y):
+            return False
+        if button == 1 and self.on_click:
+            self.on_click(self)
+        elif button == 4 and self.on_right_click:
+            self.on_right_click(self)
+        return self.contains(x, y)   # True = consumió el evento
 
     def _draw_sdf(self):
         prog   = _get_prog(self.ctx)

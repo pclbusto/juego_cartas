@@ -412,7 +412,9 @@ class BattleView(arcade.View):
         if not self.selected_comps or not self.editing_prop: return
         val = self.editing_text
         for c in self.selected_comps:
-            if self.editing_prop == "label":
+            if self.editing_prop == "id":
+                c._id = val
+            elif self.editing_prop == "label":
                 if hasattr(c, "label"): c.label = val
                 elif hasattr(c, "title"): c.title = val
                 if hasattr(c, "_build_text"): c._build_text(val)
@@ -584,10 +586,11 @@ class BattleView(arcade.View):
             arcade.draw_text(label_title, cx_f4, ui.SH//2 + 160, arcade.color.WHITE, font_size=14, anchor_x="center")
             
             props = [
+                ("id",    getattr(selected_one, "_id", "")),
                 ("label", getattr(selected_one, "label", getattr(selected_one, "title", ""))),
-                ("w", str(selected_one.w)),
-                ("h", str(getattr(selected_one, 'h', ''))),
-                ("z", str(getattr(selected_one, "z", 0))),
+                ("w",     str(selected_one.w)),
+                ("h",     str(getattr(selected_one, 'h', ''))),
+                ("z",     str(getattr(selected_one, "z", 0))),
             ]
 
             if selected_one.__class__.__name__ == "TextComponent":
