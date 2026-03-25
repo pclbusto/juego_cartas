@@ -1,5 +1,7 @@
 import arcade
 import constants
+import os
+import PIL.Image
 
 CW = constants.CARD_WIDTH
 CH = constants.CARD_HEIGHT
@@ -21,21 +23,82 @@ _BACK_LINE = (60, 50, 110)
 
 class Card(arcade.SpriteSolidColor):
 
-    def __init__(self, name="Carta Básica", card_type="MONSTER"):
+    def __init__(self, card_data=None, name="Carta Básica", card_type="MONSTER"):
+        if card_data:
+            self.card_data = card_data
+            name = card_data.get('name', name)
+            card_type = card_data.get('card_type', card_type)
+        else:
+            self.card_data = {}
+            
         face_color = _TYPE_COLORS.get(card_type.upper(), (120, 100, 80))
         super().__init__(CW, CH, face_color)
+        self._face_color = face_color   # save — self.color is always white (modulation)
         self.name      = name
         self.card_type = card_type.upper()
         self.face_up   = True
         self.in_attack_position = True
         self.current_zone = None
+        self._has_image = False
+        self.hovered = False
+        self.is_held = False
+        
+        # Load local thumbnail if available
+        img_name = self.card_data.get('image_name')
+        if img_name:
+            thumb_path = f"images/{img_name}"
+            if os.path.exists(thumb_path):
+                tex = arcade.load_texture(thumb_path)
+                self.texture = tex
+                self.scale = min(CW / tex.width, CH / tex.height)
+                self._has_image = True
+                
+        self._base_scale = self.scale[0] if isinstance(self.scale, tuple) else self.scale
+        self._base_y = self.center_y
+
+    def update(self):
+        if not hasattr(self, '_base_scale'):
+            self._base_scale = self.scale[0] if isinstance(self.scale, tuple) else self.scale
+        if not hasattr(self, '_base_y'):
+            self._base_y = self.center_y
+
+        current_s = self.scale[0] if isinstance(self.scale, tuple) else self.scale
+
+        if self.is_held:
+            # Maintain hover scale while dragging, but don't force Y
+            self.scale = current_s + (self._base_scale * 1.15 - current_s) * 0.3
+            return
+
+        if self.hovered and self.current_zone is None:
+            target_scale = self._base_scale * 1.15
+            target_y = self._base_y + 12
+        else:
+            target_scale = self._base_scale
+            target_y = self._base_y
+
+        # Lerp
+        self.scale = current_s + (target_scale - current_s) * 0.3
+        self.center_y += (target_y - self.center_y) * 0.3
 
     def draw(self, **kwargs):
         if not self.face_up:
             self._draw_back()
             return
 
-        super().draw(**kwargs)
+        if getattr(self, '_has_image', False) and hasattr(self, 'texture') and self.texture:
+            s_val = self.scale[0] if isinstance(self.scale, tuple) else self.scale
+            w = self.texture.width * s_val
+            h = self.texture.height * s_val
+            x1 = self.center_x - w / 2
+            y1 = self.center_y - h / 2
+            arcade.draw_texture_rect(self.texture, arcade.LRBT(x1, x1 + w, y1, y1 + h))
+            return
+
+        x1 = self.center_x - CW / 2
+        y1 = self.center_y - CH / 2
+        
+        color = getattr(self, '_face_color', getattr(self, 'color', (120, 100, 80)))
+        arcade.draw_lrbt_rectangle_filled(x1, x1 + CW, y1, y1 + CH, color)
 
         # Thin inner border
         x1 = self.center_x - CW / 2 + 2
@@ -43,22 +106,6 @@ class Card(arcade.SpriteSolidColor):
         x2 = self.center_x + CW / 2 - 2
         y2 = self.center_y + CH / 2 - 2
         arcade.draw_lrbt_rectangle_outline(x1, x2, y1, y2, (0, 0, 0, 80), 1)
-
-        # Dark name strip at bottom
-        strip_h = 22
-        sx1 = self.center_x - CW / 2
-        sy1 = self.center_y - CH / 2
-        arcade.draw_lrbt_rectangle_filled(sx1, sx1 + CW, sy1, sy1 + strip_h,
-                                          (0, 0, 0, 140))
-
-        text_col = _TYPE_TEXT.get(self.card_type, (255, 255, 255))
-        arcade.draw_text(
-            self.name,
-            self.center_x, sy1 + strip_h // 2,
-            text_col, font_size=8, bold=True,
-            anchor_x="center", anchor_y="center",
-            width=CW - 6
-        )
 
     def _draw_back(self):
         cx, cy = self.center_x, self.center_y

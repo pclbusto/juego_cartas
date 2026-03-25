@@ -3,12 +3,13 @@ import constants
 from database import DatabaseManager
 import os
 from collections import OrderedDict
+from ui_prueba_concepto import ShaderPanel, ShaderButton
 
 # ── Layout ────────────────────────────────────────────────────────────────────
 SW = constants.SCREEN_WIDTH   # 1280
 SH = constants.SCREEN_HEIGHT  # 720
-CW = constants.CARD_WIDTH     # 90
-CH = constants.CARD_HEIGHT    # 130
+CW = 105     # 90 -> 105
+CH = 150     # 130 -> 150
 
 TOOLBAR_H  = 50
 SEARCH_H   = 55
@@ -18,30 +19,41 @@ PAD        = 10
 CARD_GAP_X = 12
 CARD_GAP_Y = 5
 
-AVAIL_W    = SW - DETAIL_W        # 990
-AVAIL_YTOP = SH - TOOLBAR_H - SEARCH_H  # 615
-AVAIL_YBOT = DECK_H               # 210
-CARD_STEP  = CW + CARD_GAP_X     # 102
-COLS       = (AVAIL_W - PAD * 2) // CARD_STEP  # 9
+PAD          = 15
+TOP_BAR_H    = 60
+BOTTOM_BAR_H = 40
+DECK_PANEL_H = 326
+DETAIL_W     = 340
+STATS_W      = 360
+LEFT_W       = SW - DETAIL_W - PAD * 3
 
-DECK_CARD_Y  = 107   # center y for deck card sprites
-DECK_STATS_Y = 27    # y of thin stats bar text
+P1_X1 = PAD
+P1_Y2 = SH - TOP_BAR_H
+P2_X1 = PAD
+P2_Y1 = BOTTOM_BAR_H + PAD
+P1_X2 = PAD + LEFT_W
+P2_X2 = PAD + LEFT_W
+P2_Y2 = P2_Y1 + DECK_PANEL_H
+P1_Y1 = P2_Y2 + PAD
+
+P3_X1 = P1_X2 + PAD
+P3_Y1 = P2_Y1
+P3_X2 = SW - PAD
+P3_Y2 = P1_Y2
 
 # ── Colors ────────────────────────────────────────────────────────────────────
-BG        = (26, 26, 26)
-PANEL     = (38, 38, 38)
-DECK_BG   = (44, 44, 44)
-DETAIL_BG = (33, 33, 33)
-SEP       = (60, 60, 60)
-TEXT      = (225, 225, 225)
-DIM       = (120, 120, 120)
-GOLD      = (255, 200, 50)
-BLUE      = (30, 130, 255)
-RED       = (210, 60, 60)
-GREEN     = (50, 190, 80)
-BTN_ACT   = (40, 100, 200)
-BTN       = (55, 55, 55)
-BTN_HOV   = (70, 70, 70)
+BG            = (28, 28, 30)
+PANEL_BG      = (38, 40, 44)
+PANEL_OUTLINE = (60, 60, 65)
+SEP           = (70, 70, 75)
+TEXT          = (240, 240, 240)
+DIM           = (150, 150, 150)
+GOLD          = (255, 200, 50)
+BLUE          = (30, 130, 255)
+GREEN         = (50, 190, 80)
+BTN           = (55, 55, 60)
+BTN_HOV       = (75, 75, 80)
+BTN_ACT       = (40, 100, 200)
 C_MONSTER = (220, 120, 50)
 C_SPELL   = (100, 200, 255)
 C_TRAP    = (210, 100, 100)
@@ -93,17 +105,6 @@ def _neon_glow(x1, y1, x2, y2, color, r=8, alpha_mult=1.0):
         _rrect_outline(x1, y1, x2, y2, r, (255, 255, 255, int(140 * alpha_mult)), 1)
 
 
-def _draw_btn(cx, cy, w, h, label, hovered=False, active=False):
-    x1, x2 = cx - w // 2, cx + w // 2
-    y1, y2 = cy - h // 2, cy + h // 2
-    bg = BTN_ACT if active else (BTN_HOV if hovered else BTN)
-    _rrect_filled(x1, y1, x2, y2, 7, bg)
-    border = (*BLUE, 180) if active else (*SEP, 120)
-    _rrect_outline(x1, y1, x2, y2, 7, border, 1)
-    arcade.draw_text(label, cx, cy, TEXT, font_size=11,
-                     anchor_x="center", anchor_y="center")
-
-
 # ── Card sprite ───────────────────────────────────────────────────────────────
 
 class CardSprite(arcade.Sprite):
@@ -126,6 +127,7 @@ class CardSprite(arcade.Sprite):
         self.center_y  = y
         self._qty      = 1
         self.anim_progress = 0.0
+        self.bottom_label = None # New attribute for bottom text
 
     def update_animation(self, delta_time, is_hovered):
         target = 1.0 if is_hovered else 0.0
@@ -161,8 +163,9 @@ class CardSprite(arcade.Sprite):
                          anchor_x="center", anchor_y="center")
 
     def draw_qty_badge(self, qty):
-        bx = self.center_x + CW / 2 - 11
-        by = self.center_y + CH / 2 - 11
+        # Usamos self.width/height reales para que el badge siga a la carta incluso escalada
+        bx = self.center_x + self.width / 2 - 11
+        by = self.center_y + self.height / 2 - 11
         arcade.draw_circle_filled(bx, by, 12, (15, 15, 15))
         arcade.draw_circle_outline(bx, by, 12, GOLD, 1.5)
         arcade.draw_text(str(qty), bx, by, GOLD, font_size=10, bold=True,
@@ -173,7 +176,7 @@ class CardSprite(arcade.Sprite):
 
 class DeckBuilderView(arcade.View):
 
-    def __init__(self):
+    def __init__(self, deck_id=None):
         super().__init__()
         # SpriteLists are created in setup() with a dedicated high-capacity atlas
         self.avail_sprites    = arcade.SpriteList()
@@ -181,22 +184,46 @@ class DeckBuilderView(arcade.View):
         self._card_atlas      = None
         self.db               = None
         self.all_cards        = []
-        self.current_deck_id   = None
+        self.current_deck_id   = deck_id
         self.current_deck_name = ""
         self.deck_cards_data   = []
         self.avail_scroll      = 0
         self.deck_scroll       = 0
         self.search_text       = ""
         self.search_active     = False
+        self.deck_search_text  = ""
+        self.deck_search_active = False
         self.type_filter       = "ALL"
+        self.deck_type_filter  = "ALL"
+        
+        # Sub-filters state
+        self.attr_filter       = "ALL"
+        self.subtype_filter    = "ALL"
+        self.deck_attr_filter  = "ALL"
+        self.deck_subtype_filter = "ALL"
+        
         self.hover_sprite      = None
         self.hover_in_deck     = False
         self.detail_card       = None
+        self.drag_sprite       = None
         self._tex_cache        = OrderedDict()  # LRU: move_to_end on hit, popitem(last=False) on evict
         self._THUMB_LIMIT      = None  # set from DB in setup()
         self._DETAIL_LIMIT     = 20
         self._free_on_exit     = False  # set from DB in setup()
         self.mx = self.my      = 0
+
+        # New deck dialog state
+        self.show_dialog = False
+        self.dialog_input = ""
+        self.dialog_panel = None
+        self.btn_ok = None
+        self.btn_cancel = None
+
+    def on_show_view(self):
+        ctx = self.window.ctx
+        self.dialog_panel = ShaderPanel(ctx, SW // 2, SH // 2, 400, 200, title="Nuevo Mazo")
+        self.btn_ok = ShaderButton(ctx, SW // 2 - 80, SH // 2 - 40, 120, 40, "Crear")
+        self.btn_cancel = ShaderButton(ctx, SW // 2 + 80, SH // 2 - 40, 120, 40, "Cancelar")
 
     def setup(self):
         # Dedicated atlas: capacity=4 → 16 384 UV slots; auto_resize handles pixel growth
@@ -216,16 +243,113 @@ class DeckBuilderView(arcade.View):
         self.all_cards = self.db.get_cards()
 
         decks = self.db.get_all_decks()
-        if decks:
+        if self.current_deck_id is None and decks:
             self.current_deck_id   = decks[0]['id']
             self.current_deck_name = decks[0]['name']
-        else:
-            self.current_deck_id   = self.db.create_deck("Mi Primer Deck")
-            self.current_deck_name = "Mi Primer Deck"
+        elif self.current_deck_id:
+            # Refresh name from DB
+            deck_info = next((d for d in decks if d['id'] == self.current_deck_id), None)
+            if deck_info:
+                self.current_deck_name = deck_info['name']
+            else:
+                # Fallback to first if not found
+                if decks:
+                    self.current_deck_id = decks[0]['id']
+                    self.current_deck_name = decks[0]['name']
+
+        # UI elements MUST be init before display updates (which trigger recalc_hover)
+        self._init_ui_elements()
 
         self.load_deck()
         self.update_avail_display()
         self.update_deck_display()
+        
+    def _init_ui_elements(self):
+        ctx = self.window.ctx
+        # Toolbar
+        self.tb_objs = []
+        for cx, lbl in self._toolbar_btns():
+            # "Regresar" es más largo, le damos más espacio
+            w = 175 if "Regresar" in lbl else 150
+            btn = ShaderButton(ctx, cx, SH - TOP_BAR_H // 2, w, 36, lbl)
+            self.tb_objs.append(btn)
+        
+        # Deck selection dialog state
+        self.show_deck_list = False
+        self.available_decks = []
+            
+        # Panel 1 Filters
+        h1_y = P1_Y2 - 30
+        sbw = 240
+        sx = P1_X1 + (P1_X2 - P1_X1) // 2 - sbw // 2
+        fx = sx + sbw + 20
+        bw, bh = 100, 30
+        self.p1_f_objs = {}
+        for code, lbl, col in [("MONSTER", "Monstruos", C_MONSTER), ("SPELL", "Magias", C_SPELL), ("TRAP", "Trampas", C_TRAP)]:
+            btn = ShaderButton(ctx, fx + bw // 2, h1_y, bw, bh, lbl)
+            btn.active_color = col
+            self.p1_f_objs[code] = btn
+            fx += bw + 8
+            
+        # Panel 1 Sub-filters
+        smy = h1_y - 35
+        smw, smh = 62, 22
+        gap = 5
+        smx_start = sx + sbw // 2 - (13 * (smw + gap) + 15) // 2
+        self.p1_sub_objs = {}
+        # Attributes
+        smx = smx_start
+        for attr, col in [("DARK", (160, 80, 200)), ("LIGHT", (240, 230, 80)), ("EARTH", (140, 110, 60)), 
+                          ("WATER", (60, 160, 230)), ("FIRE", (240, 100, 40)), ("WIND", (80, 200, 120))]:
+            btn = ShaderButton(ctx, smx + smw // 2, smy, smw, smh, attr)
+            btn.active_color = col
+            btn.radius = 6
+            btn.font_size = 10
+            self.p1_sub_objs[attr] = btn
+            smx += smw + gap
+        # Subtypes
+        smx += 20
+        for stype in ["Normal", "Effect", "Ritual", "Fusion", "Synchro", "Xyz", "Link"]:
+            btn = ShaderButton(ctx, smx + smw // 2, smy, smw, smh, stype)
+            btn.active_color = BLUE
+            btn.radius = 6
+            btn.font_size = 10
+            self.p1_sub_objs[stype] = btn
+            smx += smw + gap
+
+        # Panel 2 Filters
+        h2_y = P2_Y2 - 25
+        tsx = P2_X1 + (P2_X2 - P2_X1) // 2 - sbw // 2
+        dfx_start = tsx + sbw + 20
+        self.p2_f_objs = {}
+        curr_fx = dfx_start
+        for code, lbl, col in [("MONSTER", "Monstruos", C_MONSTER), ("SPELL", "Magias", C_SPELL), ("TRAP", "Trampas", C_TRAP)]:
+            w = 175 if code == "MONSTER" else 135
+            btn = ShaderButton(ctx, curr_fx + w // 2, h2_y, w, bh, lbl)
+            btn.active_color = col
+            self.p2_f_objs[code] = btn
+            curr_fx += w + 8
+            
+        # Panel 2 Sub-filters
+        smy = h2_y - 35
+        self.p2_sub_objs = {}
+        smx = tsx + sbw // 2 - (13 * (smw + gap) + 15) // 2
+        for attr, col in [("DARK", (160, 80, 200)), ("LIGHT", (240, 230, 80)), ("EARTH", (140, 110, 60)), 
+                          ("WATER", (60, 160, 230)), ("FIRE", (240, 100, 40)), ("WIND", (80, 200, 120))]:
+            btn = ShaderButton(ctx, smx + smw // 2, smy, smw, smh, attr)
+            btn.active_color = col
+            btn.radius = 6
+            btn.font_size = 10
+            self.p2_sub_objs[attr] = btn
+            smx += smw + gap
+        smx += 20
+        for stype in ["Normal", "Effect", "Ritual", "Fusion", "Synchro", "Xyz", "Link"]:
+            btn = ShaderButton(ctx, smx + smw // 2, smy, smw, smh, stype)
+            btn.active_color = BLUE
+            btn.radius = 6
+            btn.font_size = 10
+            self.p2_sub_objs[stype] = btn
+            smx += smw + gap
 
     # ── Data ──────────────────────────────────────────────────────────────────
 
@@ -241,17 +365,27 @@ class DeckBuilderView(arcade.View):
         for c in self.all_cards:
             if q and q not in c.get('name', '').lower():
                 continue
+            
             ct = c.get('card_type', '')
-            if self.type_filter == 'MONSTER' and ct != 'MONSTER':
-                continue
-            if self.type_filter == 'SPELL' and ct != 'SPELL':
-                continue
-            if self.type_filter == 'TRAP' and ct != 'TRAP':
-                continue
-            if self.type_filter == 'NO_IMG':
-                path = f"images/{c.get('image_name', '')}"
-                if os.path.exists(path):
+            
+            # Global Type Filter
+            if self.type_filter != 'ALL':
+                if self.type_filter == 'NO_IMG':
+                    path = f"images/{c.get('image_name', '')}"
+                    if os.path.exists(path): continue
+                elif ct != self.type_filter:
                     continue
+            
+            # Monster Sub-filters
+            if self.type_filter == 'MONSTER':
+                if self.attr_filter != "ALL" and c.get('attribute') != self.attr_filter:
+                    continue
+                if self.subtype_filter != "ALL":
+                    # Check if subtype_filter is in the card's 'type' string (e.g. 'Effect' in 'Spellcaster/Effect')
+                    card_subtypes = (c.get('type') or '').lower()
+                    if self.subtype_filter.lower() not in card_subtypes:
+                        continue
+            
             result.append(c)
         return result
 
@@ -273,35 +407,98 @@ class DeckBuilderView(arcade.View):
 
     def update_avail_display(self):
         self.avail_sprites.clear()
+        
+        HEADER_H = 100
+        usable_w = (P1_X2 - P1_X1) - PAD * 2
+        usable_h = (P1_Y2 - P1_Y1) - HEADER_H - PAD
+        
+        CARD_STEP_X = CW + 12
+        CARD_STEP_Y = CH + 15
+        
+        max_cols = int(usable_w // CARD_STEP_X)
+        max_rows = int(usable_h // CARD_STEP_Y)
+        
+        cards_per_page = max_cols * max_rows
+        
         filtered = self.get_filtered()
-        start    = self.avail_scroll * COLS
+        visible_cards = filtered[self.avail_scroll * max_cols:]
+        visible_cards = visible_cards[:cards_per_page]
 
-        # Row positions: 3 rows max, skipping any that overlap deck strip
-        row_y0 = AVAIL_YTOP - CH // 2 - 5  # 545
-
-        for idx, card in enumerate(filtered[start: start + COLS * 3]):
-            row = idx // COLS
-            col = idx % COLS
-            cy  = row_y0 - row * (CH + CARD_GAP_Y)
-            if cy - CH // 2 < AVAIL_YBOT:
-                continue
-            cx = PAD + CW // 2 + col * CARD_STEP
+        for idx, card in enumerate(visible_cards):
+            col = idx % max_cols
+            row = idx // max_cols
+            cx = P1_X1 + PAD + col * CARD_STEP_X + CW // 2
+            cy = P1_Y2 - HEADER_H - row * CARD_STEP_Y - CH // 2
+            
             tex = self._get_thumb(card.get('image_name'))
-            self.avail_sprites.append(CardSprite(card, cx, cy, texture=tex))
+            s  = CardSprite(card, cx, cy, texture=tex)
+            self.avail_sprites.append(s)
+
         self._recalc_hover()
 
     def update_deck_display(self):
         self.deck_sprites.clear()
-        stats_w  = 360
-        max_cols = (AVAIL_W - stats_w - PAD) // CARD_STEP
+        DECK_CARD_SCALE = 1.45  # Aumentado significativamente
+        DCW = CW * DECK_CARD_SCALE
+        DCH = CH * DECK_CARD_SCALE
+        CARD_STEP_X = DCW + 5
+        CARD_STEP_Y = DCH + 10
+        
+        usable_w = P2_X2 - P2_X1 - STATS_W - PAD
+        max_cols = int(usable_w // CARD_STEP_X)
+        max_rows = 1  # Ahora una sola fila
+        cards_per_page = max_cols * max_rows
+        
+        # Filtrado de búsqueda en el mazo
+        filtered_deck = self.deck_cards_data
+        
+        # Búsqueda por texto
+        if getattr(self, 'deck_search_text', ''):
+            q = self.deck_search_text.lower()
+            filtered_deck = [c for c in filtered_deck if q in c.get('name', '').lower()]
+            
+        # Filtro por tipo global
+        if getattr(self, 'deck_type_filter', 'ALL') != 'ALL':
+            tf = self.deck_type_filter
+            filtered_deck = [c for c in filtered_deck if c.get('card_type') == tf]
+            
+        # Filtros específicos de Monstruos para el Mazo
+        if getattr(self, 'deck_type_filter', 'ALL') == 'MONSTER':
+            if getattr(self, 'deck_attr_filter', 'ALL') != 'ALL':
+                af = self.deck_attr_filter
+                filtered_deck = [c for c in filtered_deck if c.get('attribute') == af]
+            if getattr(self, 'deck_subtype_filter', 'ALL') != 'ALL':
+                sf = self.deck_subtype_filter.lower()
+                filtered_deck = [c for c in filtered_deck if sf in (c.get('type') or '').lower()]
+            
+        visible_cards = filtered_deck[self.deck_scroll : self.deck_scroll + cards_per_page]
+        
+        grid_cols = min(max_cols, (len(filtered_deck) + max_rows - 1) // max_rows)
+        if grid_cols == 0:
+            grid_cols = 1
+            
+        grid_w = grid_cols * CARD_STEP_X - 5
+        start_x = P2_X1 + PAD + DCW / 2
+        
+        p2_inner_h = (P2_Y2 - 80) - P2_Y1
+        mid_y = P2_Y1 + p2_inner_h / 2
+        row_y = [mid_y] # Solo una fila central
 
-        for idx, card in enumerate(
-            self.deck_cards_data[self.deck_scroll: self.deck_scroll + max_cols]
-        ):
-            cx = stats_w + CW // 2 + idx * CARD_STEP
+        for idx, card in enumerate(visible_cards):
+            col = idx
+            row = 0
+            
+            cx = start_x + col * CARD_STEP_X
+            cy = row_y[row]
+            
             tex = self._get_thumb(card.get('image_name'))
-            s  = CardSprite(card, cx, DECK_CARD_Y, texture=tex)
+            s  = CardSprite(card, cx, cy, texture=tex)
             s._qty = card.get('quantity', 1)
+            
+            s._card_scale *= DECK_CARD_SCALE
+            s.scale = s._card_scale
+            s._base_y = cy
+            
             self.deck_sprites.append(s)
         self._recalc_hover()
 
@@ -378,71 +575,67 @@ class DeckBuilderView(arcade.View):
     def on_draw(self):
         self.clear()
 
-        # ── Panels ──
+        # Fondo global oscuro
         arcade.draw_lrbt_rectangle_filled(0, SW, 0, SH, BG)
-        arcade.draw_lrbt_rectangle_filled(0, SW, SH - TOOLBAR_H, SH, PANEL)
-        arcade.draw_line(0, SH - TOOLBAR_H, SW, SH - TOOLBAR_H, SEP, 1)
 
-        arcade.draw_lrbt_rectangle_filled(0, AVAIL_W, DECK_H, SH - TOOLBAR_H, PANEL)
-        arcade.draw_line(0, AVAIL_YTOP, AVAIL_W, AVAIL_YTOP, SEP, 1)
+        # Panel 1: Avail Cards
+        _rrect_filled(P1_X1, P1_Y1, P1_X2, P1_Y2, 10, PANEL_BG)
+        _rrect_outline(P1_X1, P1_Y1, P1_X2, P1_Y2, 10, PANEL_OUTLINE, 1)
 
-        # Detail panel extends full height so description isn't clipped
-        arcade.draw_lrbt_rectangle_filled(AVAIL_W, SW, 0, SH - TOOLBAR_H, DETAIL_BG)
-        arcade.draw_line(AVAIL_W, 0, AVAIL_W, SH - TOOLBAR_H, SEP, 1)
+        # Panel 2: Deck
+        _rrect_filled(P2_X1, P2_Y1, P2_X2, P2_Y2, 10, PANEL_BG)
+        _rrect_outline(P2_X1, P2_Y1, P2_X2, P2_Y2, 10, PANEL_OUTLINE, 1)
 
-        # Deck strip only on the left side
-        arcade.draw_lrbt_rectangle_filled(0, AVAIL_W, 0, DECK_H, DECK_BG)
-        arcade.draw_line(0, DECK_H, AVAIL_W, DECK_H, SEP, 1)
+        # Panel 3: Details
+        _rrect_filled(P3_X1, P3_Y1, P3_X2, P3_Y2, 10, PANEL_BG)
+        _rrect_outline(P3_X1, P3_Y1, P3_X2, P3_Y2, 10, PANEL_OUTLINE, 1)
 
-        # thin stats bar at very bottom of deck strip
-        arcade.draw_lrbt_rectangle_filled(0, AVAIL_W, 0, 30, (30, 30, 30))
-        arcade.draw_line(0, 30, AVAIL_W, 30, SEP, 1)
+        # Toolbar
+        for btn in self.tb_objs: btn.draw()
 
-        # ── Toolbar ──
-        arcade.draw_text(f"  {self.current_deck_name}",
-                         20, SH - TOOLBAR_H + 14, GOLD, font_size=16, bold=True)
-        tby = SH - TOOLBAR_H // 2  # 695
-        for cx, lbl in self._toolbar_btns():
-            hov = _in_rect(self.mx, self.my, cx - 55, tby - 16, cx + 55, tby + 16)
-            _draw_btn(cx, tby, 110, 32, lbl, hovered=hov)
+        # --- Interaction for Panel 1 (Available Cards) ---
+        h1_y = P1_Y2 - 30
+        sbw = 240
+        sx = P1_X1 + (P1_X2 - P1_X1) // 2 - sbw // 2
+        
+        # Search box Panel 1
+        hov_sb = _in_rect(self.mx, self.my, sx, h1_y - 16, sx + sbw, h1_y + 16)
+        bg_sb = (*SEP, 150) if hov_sb or self.search_active else (*BTN, 150)
+        _rrect_filled(sx, h1_y - 16, sx + sbw, h1_y + 16, 10, bg_sb)
+        _rrect_outline(sx, h1_y - 16, sx + sbw, h1_y + 16, 10, (*BLUE, 200) if self.search_active else SEP, 1)
+        
+        txt = self.search_text + ("|" if self.search_active else "")
+        if not txt and not self.search_active:
+            arcade.draw_text("Buscar carta...", sx + 15, h1_y, (*TEXT, 100), font_size=11, anchor_y="center")
+        else:
+            arcade.draw_text(txt, sx + 15, h1_y, TEXT, font_size=11, anchor_y="center")
+        arcade.draw_text("⌕", sx + sbw - 20, h1_y, (*TEXT, 150), font_size=14, anchor_y="center")
 
-        # ── Search area ──
-        sx, sy = PAD, AVAIL_YTOP + 12
-        sbw, sbh = 280, 32
-        border = BLUE if self.search_active else SEP
-        _rrect_filled(sx, sy, sx + sbw, sy + sbh, 8, (48, 48, 48))
-        _rrect_outline(sx, sy, sx + sbw, sy + sbh, 8, border, 1.5)
-        placeholder = not bool(self.search_text)
-        disp = ("Buscar por nombre..." if placeholder
-                else self.search_text + ("_" if self.search_active else ""))
-        arcade.draw_text(disp, sx + 10, sy + sbh // 2,
-                         DIM if placeholder else TEXT,
-                         font_size=11, anchor_y="center")
+        # Filtros Panel 1
+        for code, btn in self.p1_f_objs.items():
+            btn.active = self.type_filter == code
+            btn.draw()
+            
+        # ── Monster Sub-filters (Panel 1) ──
+        if self.type_filter == 'MONSTER':
+            for key, btn in self.p1_sub_objs.items():
+                if key in ["DARK", "LIGHT", "EARTH", "WATER", "FIRE", "WIND"]:
+                    btn.active = self.attr_filter == key
+                else:
+                    btn.active = self.subtype_filter == key
+                btn.draw()
+            
+        arcade.draw_line(P1_X1, P1_Y2 - 90, P1_X2, P1_Y2 - 90, (*PANEL_OUTLINE, 200), 1)
 
-        # Type filter pills
-        fx = sx + sbw + 16
-        for code, lbl, w in [("ALL", "Todos", 68), ("MONSTER", "Monstruo", 90),
-                               ("SPELL", "Magia", 72), ("TRAP", "Trampa", 72),
-                               ("NO_IMG", "Sin Imagen", 90)]:
-            active = self.type_filter == code
-            hov    = _in_rect(self.mx, self.my, fx, sy, fx + w, sy + sbh)
-            _draw_btn(fx + w // 2, sy + sbh // 2, w, sbh, lbl,
-                      hovered=hov, active=active)
-            fx += w + 8
-
-        arcade.draw_text("Cartas Disponibles", PAD, AVAIL_YTOP - 13,
-                         DIM, font_size=11)
-
-        # Scroll hint
+        # ── Scroll hint P1 ──
         filtered   = self.get_filtered()
-        total_rows = (len(filtered) + COLS - 1) // COLS
-        rows_vis   = 3
-        if total_rows > rows_vis:
-            arcade.draw_text(
-                f"Pág. {self.avail_scroll + 1}/{max(1, total_rows - rows_vis + 1)}"
-                "  (rueda para navegar)",
-                AVAIL_W // 2, AVAIL_YBOT + 5, DIM, font_size=9, anchor_x="center"
-            )
+        cards_per_page = int((P1_X2 - P1_X1 - PAD * 2) // (CW + 12)) * int((P1_Y2 - P1_Y1 - 60 - PAD) // (CH + 15))
+        total_pages = max(1, (len(filtered) + max(1, cards_per_page) - 1) // max(1, cards_per_page))
+        curr_page = (self.avail_scroll * 1) + 1 # rough translation
+        arcade.draw_text(
+            f"Pág. {curr_page}/{total_pages}",
+            P1_X2 - PAD, P1_Y1 + PAD, DIM, font_size=9, anchor_x="right"
+        )
 
         # ── Available cards ──
         self.avail_sprites.draw()
@@ -452,136 +645,209 @@ class DeckBuilderView(arcade.View):
         # ── Detail panel ──
         self._draw_detail()
 
-        # ── Deck strip ──
-        stats = self.get_deck_stats()
-        arcade.draw_text("DECK ACTUAL",
-                         PAD, DECK_H - 14, DIM, font_size=9, bold=True)
+        # ── Panel 2 Header ──
+        h2_y = P2_Y2 - 25
+        arcade.draw_text("Current Deck:", P2_X1 + PAD, h2_y, TEXT, font_size=16, bold=True, anchor_y="center")
+        
+        display_name = getattr(self, 'new_deck_name', '') + "_" if getattr(self, 'renaming_deck', False) else self.current_deck_name
+        arcade.draw_text(f"{display_name} ({len(self.deck_cards_data)} cards)", P2_X1 + PAD + 150, h2_y, DIM if not getattr(self, 'renaming_deck', False) else GOLD, font_size=14, anchor_y="center")
+        
+        # Barra de búsqueda en el Panel 2 (Mazo) - Centrada
+        sbw, sbh = 240, 32
+        tsx = P2_X1 + (P2_X2 - P2_X1) // 2 - sbw // 2
+        hov_sb = _in_rect(self.mx, self.my, tsx, h2_y - sbh//2, tsx + sbw, h2_y + sbh//2)
+        bg_sb = (*SEP, 150) if hov_sb or self.deck_search_active else (*BTN, 150)
+        _rrect_filled(tsx, h2_y - sbh//2, tsx + sbw, h2_y + sbh//2, 10, bg_sb)
+        _rrect_outline(tsx, h2_y - sbh//2, tsx + sbw, h2_y + sbh//2, 10, (*BLUE, 200) if self.deck_search_active else SEP, 1)
+        
+        txt = self.deck_search_text + ("|" if self.deck_search_active else "")
+        if not txt and not self.deck_search_active:
+            arcade.draw_text("Buscar en mazo...", tsx + 15, h2_y, (*TEXT, 100), font_size=11, anchor_y="center")
+        else:
+            arcade.draw_text(txt, tsx + 15, h2_y, TEXT, font_size=11, anchor_y="center")
+        arcade.draw_text("⌕", tsx + sbw - 20, h2_y, (*TEXT, 150), font_size=14, anchor_y="center")
 
-        # Colored stat badges
-        bh, br = 22, 11
-        by1, by2 = DECK_STATS_Y - 1, DECK_STATS_Y + bh - 1
-        bx = PAD
-        total_col = (GREEN if 40 <= stats['total'] <= 60
-                     else RED if stats['total'] > 60 else GOLD)
-        for txt, fg, bg_dark in [
-            (f"♟ {stats['monsters']} Monstruos", C_MONSTER, (55, 28, 5)),
-            (f"✦ {stats['spells']} Magias",      C_SPELL,   (5, 30, 60)),
-            (f"⚠ {stats['traps']} Trampas",      C_TRAP,    (55, 10, 10)),
-            (f"◈ {stats['total']}/60",           total_col, (20, 20, 20)),
-        ]:
-            tw = len(txt) * 7 + 18
-            _rrect_filled(bx, by1, bx + tw, by2, br, bg_dark)
-            _rrect_outline(bx, by1, bx + tw, by2, br, (*fg, 160), 1)
-            arcade.draw_text(txt, bx + tw // 2, DECK_STATS_Y + bh // 2,
-                             fg, font_size=10,
-                             anchor_x="center", anchor_y="center")
-            bx += tw + 8
+        # ── Filtros del Mazo (Botones a la derecha del buscador) ──
+        stats = self.get_deck_stats()
+        for code, btn in self.p2_f_objs.items():
+            btn.active = self.deck_type_filter == code
+            # Actualizar label con count
+            lbl = "Monstruos" if code == "MONSTER" else ("Magias" if code == "SPELL" else "Trampas")
+            btn.label = f"[{stats[code.lower() + 's']}] {lbl}"
+            btn.draw()
+
+        # Total Badge (Al final de los botones del panel 2)
+        # Sumamos los anchos variables: Monstruo(175) + Magia(135) + Trampa(135) + 3*Gap(8)
+        dfx = tsx + sbw + 20 + (175 + 135 + 135 + 3 * 8)
+        arcade.draw_text(f"Total: {stats['total']}/60", dfx + 10, h2_y, TEXT, font_size=11, bold=True, anchor_y="center")
+
+        # ── Monster Sub-filters (Panel 2 / Deck) ──
+        if self.deck_type_filter == 'MONSTER':
+            for key, btn in self.p2_sub_objs.items():
+                if key in ["DARK", "LIGHT", "EARTH", "WATER", "FIRE", "WIND"]:
+                    btn.active = self.deck_attr_filter == key
+                else:
+                    btn.active = self.deck_subtype_filter == key
+                btn.draw()
+
+        arcade.draw_line(P2_X1, P2_Y2 - 80, P2_X2, P2_Y2 - 80, (*PANEL_OUTLINE, 200), 1)
+
+        # ── Diálogos ──
+        if self.show_dialog:
+            self.dialog_panel.draw()
+            # ... draw label and input ...
+            arcade.draw_text("Nombre del Mazo:", SW // 2, SH // 2 + 30, TEXT, anchor_x="center")
+            _rrect_filled(SW // 2 - 150, SH // 2 - 10, SW // 2 + 150, SH // 2 + 20, 5, BTN)
+            arcade.draw_text(self.dialog_input + "|", SW // 2 - 140, SH // 2 + 5, TEXT, anchor_y="center")
+            self.btn_ok.draw()
+            self.btn_cancel.draw()
+        
+        if getattr(self, 'show_deck_list', False):
+            # Panel de selección de deck
+            ctx = self.window.ctx
+            w, h = 400, 500
+            px, py = SW // 2, SH // 2
+            _rrect_filled(px - w//2, py - h//2, px + w//2, py + h//2, 12, (30, 30, 35, 240))
+            _rrect_outline(px - w//2, py - h//2, px + w//2, py + h//2, 12, BLUE, 2)
+            
+            arcade.draw_text("Seleccionar Mazo", px, py + h//2 - 30, GOLD, font_size=16, bold=True, anchor_x="center")
+            
+            start_y = py + h//2 - 80
+            for idx, d in enumerate(self.available_decks):
+                dy = start_y - idx * 45
+                color = BTN_ACT if d['id'] == self.current_deck_id else BTN
+                hover = _in_rect(self.mx, self.my, px - 180, dy - 18, px + 180, dy + 18)
+                if hover: color = BTN_HOV
+                
+                _rrect_filled(px - 180, dy - 18, px + 180, dy + 18, 5, color)
+                arcade.draw_text(f"{d['name']} ({d['card_count']})", px - 170, dy, TEXT, anchor_y="center")
+            
+            arcade.draw_text("[ESC] para Cerrar", px, py - h//2 + 20, DIM, font_size=10, anchor_x="center")
 
         self.deck_sprites.draw()
         for s in self.deck_sprites:
-            s.draw_glow(RED, "−")
             s.draw_qty_badge(s._qty)
+            
+        # ── Footer Text ──
+        arcade.draw_text("🖱 Left Click: Add to deck | Right Click: Remove | Mouse Wheel: Scroll",
+                         SW // 2, BOTTOM_BAR_H // 2, DIM, font_size=11, anchor_x="center", anchor_y="center")
+
+
+        # ── Ghost para arrastrar (Drag & Drop) ──
+        if getattr(self, 'drag_sprite', None):
+            s = arcade.Sprite()
+            s.texture = self.drag_sprite.texture
+            s.scale = self.drag_sprite._card_scale * 1.18
+            s.center_x = getattr(self, 'drag_ghost_x', self.mx)
+            s.center_y = getattr(self, 'drag_ghost_y', self.my)
+            s.alpha = 200
+            sl = arcade.SpriteList()
+            sl.append(s)
+            sl.draw()
 
     def _draw_detail(self):
-        dpx = AVAIL_W + DETAIL_W // 2  # 1135
+        dpx = P3_X1 + (P3_X2 - P3_X1) // 2
+
+        # Header "Card Details"
+        arcade.draw_text("Card Details", P3_X1 + PAD, P3_Y2 - 30, TEXT, font_size=16, bold=True, anchor_y="center")
+        arcade.draw_line(P3_X1, P3_Y2 - 60, P3_X2, P3_Y2 - 60, (*PANEL_OUTLINE, 200), 1)
 
         if not self.detail_card:
-            arcade.draw_text(
-                "Pasa el cursor\nsobre una carta\npara ver detalles",
-                dpx, (SH - TOOLBAR_H + DECK_H) // 2,
-                DIM, font_size=12, anchor_x="center", anchor_y="center",
-                multiline=True, width=DETAIL_W - 20, align="center"
-            )
             return
 
         card    = self.detail_card
-        tex     = self._get_tex(card.get('image_name'))
-        img_h   = 245
-        img_y   = SH - TOOLBAR_H - img_h // 2 - 8  # 539
+        tex     = self._tex_cache.get(card.get('image_name'))
+        if not tex:
+            tex = self._get_thumb(card.get('image_name'))
+            
+        img_h   = 240
+        img_y   = P3_Y2 - 60 - img_h // 2 - 10
 
         if tex:
-            scale = min((DETAIL_W - 24) / tex.width, img_h / tex.height)
+            scale = min((DETAIL_W - 40) / tex.width, img_h / tex.height)
             s = arcade.Sprite()
             s.texture  = tex
             s.scale    = scale
             s.center_x = dpx
             s.center_y = img_y
+            
+            # Yellow Glow like reference
+            _rrect_outline(dpx - (tex.width*scale)/2 - 4, img_y - (tex.height*scale)/2 - 4,
+                           dpx + (tex.width*scale)/2 + 4, img_y + (tex.height*scale)/2 + 4, 
+                           10, (*GOLD, 100), 6)
+            _rrect_outline(dpx - (tex.width*scale)/2 - 2, img_y - (tex.height*scale)/2 - 2,
+                           dpx + (tex.width*scale)/2 + 2, img_y + (tex.height*scale)/2 + 2, 
+                           10, (*GOLD, 200), 2)
+            
             sl = arcade.SpriteList()
             sl.append(s)
             sl.draw()
         else:
             arcade.draw_lrbt_rectangle_filled(
-                AVAIL_W + 12, SW - 12,
+                P3_X1 + 20, P3_X2 - 20,
                 img_y - img_h // 2, img_y + img_h // 2,
                 (55, 55, 72)
             )
 
-        # Name — with subtle background
-        ny  = img_y - img_h // 2 - 8
-        pad = 12
-        _rrect_filled(AVAIL_W + 6, ny - 38, SW - 6, ny + 2, 8, (42, 42, 42))
-        arcade.draw_text(card.get('name', '?'),
-                         AVAIL_W + pad, ny, TEXT,
-                         font_size=13, bold=True,
-                         width=DETAIL_W - pad * 2, multiline=True, anchor_y="top")
+        # Name
+        ny  = img_y - img_h // 2 - 25
+        title = card.get('name', '?')
+        arcade.draw_text(title, P3_X1 + PAD, ny, TEXT, font_size=16, bold=True, anchor_y="center")
 
-        # Stats rows with icon-like prefix symbols
-        def _fmt(v): return str(v) if v is not None else '?'
-        attr  = card.get('attribute', '')
-        ctype = card.get('card_type', '')
-        # Attribute color
+        # Horizontal Attributes
+        attr  = card.get('attribute', 'N/A')
+        lvl   = card.get('level', '?')
+        tipo  = (card.get('type') or 'N/A').split()[0]
+        
         attr_col = {'DARK': (160, 80, 200), 'LIGHT': (240, 230, 80),
                     'FIRE': (240, 100, 40), 'WATER': (60, 160, 230),
                     'EARTH': (140, 110, 60), 'WIND': (80, 200, 120),
-                    'DIVINE': (240, 200, 80)}.get(attr, TEXT)
+                    'DIVINE': (240, 200, 80)}.get(attr, GOLD)
 
-        sy = ny - 52
-        rows = []
-        if ctype == 'MONSTER':
-            rows = [
-                ("⬡ Atributo", attr or '-', attr_col),
-                ("★ Nivel",    _fmt(card.get('level')), GOLD),
-                ("⚔ ATK",      _fmt(card.get('atk')),  (200, 80, 80)),
-                ("🛡 DEF",      _fmt(card.get('def')),  (80, 150, 220)),
-                ("◉ Tipo",     (card.get('type') or '-')[:28], DIM),
-            ]
-        elif ctype == 'SPELL':
-            rows = [
-                ("✦ Tipo",     (card.get('type') or 'Normal')[:28], C_SPELL),
-            ]
-        elif ctype == 'TRAP':
-            rows = [
-                ("⚠ Tipo",     (card.get('type') or 'Normal')[:28], C_TRAP),
-            ]
-
-        for icon_label, val, val_col in rows:
-            arcade.draw_text(icon_label, AVAIL_W + pad, sy, DIM, font_size=10)
-            arcade.draw_text(val, SW - pad, sy, val_col,
-                             font_size=10, bold=True, anchor_x="right")
-            sy -= 20
-
-        # Separator
-        arcade.draw_line(AVAIL_W + pad, sy - 4, SW - pad, sy - 4, SEP, 1)
+        sy = ny - 30
+        ax = P3_X1 + PAD
+        
+        arcade.draw_circle_filled(ax + 8, sy, 8, attr_col)
+        arcade.draw_text(attr[0] if attr else "?", ax + 8, sy, BG, font_size=9, bold=True, anchor_x="center", anchor_y="center")
+        arcade.draw_text("Attr.", ax + 22, sy, DIM, font_size=10, anchor_y="center")
+        
+        ax += 90
+        arcade.draw_circle_filled(ax + 8, sy, 8, (250, 100, 0))
+        arcade.draw_text("★", ax + 8, sy, BG, font_size=9, bold=True, anchor_x="center", anchor_y="center")
+        arcade.draw_text("Nivel", ax + 22, sy, DIM, font_size=10, anchor_y="center")
+        
+        ax += 90
+        arcade.draw_circle_filled(ax + 8, sy, 8, (150, 50, 200))
+        arcade.draw_text("◉", ax + 8, sy, BG, font_size=9, bold=True, anchor_x="center", anchor_y="center")
+        arcade.draw_text("Tipo", ax + 22, sy, DIM, font_size=10, anchor_y="center")
 
         # Effect text
         effect = card.get('text', '')
         if effect:
             arcade.draw_text(
-                effect, AVAIL_W + pad, sy - 12,
-                (175, 175, 175), font_size=9,
-                width=DETAIL_W - pad * 2, multiline=True, anchor_y="top"
+                effect, P3_X1 + PAD, sy - 30,
+                (175, 175, 175), font_size=10,
+                width=DETAIL_W - PAD * 2, multiline=True, anchor_y="top"
             )
 
     # ── Events ────────────────────────────────────────────────────────────────
 
     def _toolbar_btns(self):
         return [
-            (SW - 75,  "← Atrás"),
-            (SW - 200, "✓ Guardar"),
-            (SW - 325, "+ Nuevo Deck"),
+            (SW - PAD - 75,  "Guardar Mazo"),
+            (SW - PAD - 245, "Nuevo Mazo"),
+            (SW - PAD - 415, "Mis Decks"),
+            (SW - PAD - 585, "Regresar al Juego")
         ]
 
+    def _open_deck_list(self):
+        self.available_decks = self.db.get_all_decks_with_card_count()
+        self.show_deck_list = True
+
     def on_update(self, delta_time):
+        if getattr(self, 'show_dialog', False) or getattr(self, 'show_deck_list', False):
+            return
+
         for s in self.avail_sprites:
             is_hovered = (s is self.hover_sprite and not self.hover_in_deck)
             s.update_animation(delta_time, is_hovered)
@@ -592,6 +858,27 @@ class DeckBuilderView(arcade.View):
 
     def on_mouse_motion(self, x, y, dx, dy):
         self.mx, self.my = x, y
+        
+        # UI Buttons hover
+        for btn in self.tb_objs: btn.on_mouse_motion(x, y)
+        for btn in self.p1_f_objs.values(): btn.on_mouse_motion(x, y)
+        if self.type_filter == 'MONSTER':
+            for btn in self.p1_sub_objs.values(): btn.on_mouse_motion(x, y)
+        for btn in self.p2_f_objs.values(): btn.on_mouse_motion(x, y)
+        if self.deck_type_filter == 'MONSTER':
+            for btn in self.p2_sub_objs.values(): btn.on_mouse_motion(x, y)
+            
+        if getattr(self, 'show_dialog', False) or getattr(self, 'show_deck_list', False):
+            if getattr(self, 'btn_ok', None):
+                self.btn_ok.on_mouse_motion(x, y)
+                self.btn_cancel.on_mouse_motion(x, y)
+            return
+
+        if getattr(self, 'drag_sprite', None):
+            self.drag_ghost_x = x
+            self.drag_ghost_y = y
+            return  # Pausamos el highlight del hover durante el arrastre
+
         av = arcade.get_sprites_at_point((x, y), self.avail_sprites)
         dk = arcade.get_sprites_at_point((x, y), self.deck_sprites)
         if av:
@@ -616,75 +903,248 @@ class DeckBuilderView(arcade.View):
             self.hover_sprite = None
 
     def on_mouse_press(self, x, y, button, modifiers):
+        if getattr(self, 'show_deck_list', False):
+            w, h = 400, 500
+            px, py = SW // 2, SH // 2
+            start_y = py + h//2 - 80
+            for idx, d in enumerate(self.available_decks):
+                dy = start_y - idx * 45
+                if _in_rect(x, y, px - 180, dy - 18, px + 180, dy + 18):
+                    self.current_deck_id = d['id']
+                    self.current_deck_name = d['name']
+                    self.load_deck()
+                    self.update_deck_display()
+                    self.show_deck_list = False
+                    return
+            if not _in_rect(x, y, px - w//2, py - h//2, px + w//2, py + h//2):
+                self.show_deck_list = False
+            return
+
+        if self.show_dialog:
+            if button == arcade.MOUSE_BUTTON_LEFT:
+                if getattr(self, 'btn_ok', None) and self.btn_ok.contains(x, y):
+                    self._confirm_new_deck()
+                elif getattr(self, 'btn_cancel', None) and self.btn_cancel.contains(x, y):
+                    self.show_dialog = False
+            return
+
+        # Check renaming click
+        h2_y = P2_Y2 - 25
+        if _in_rect(x, y, P2_X1 + 140, h2_y - 15, P2_X1 + 350, h2_y + 15):
+            self.renaming_deck = not getattr(self, 'renaming_deck', False)
+            if self.renaming_deck:
+                self.new_deck_name = self.current_deck_name
+            else:
+                if hasattr(self, 'new_deck_name') and self.new_deck_name.strip():
+                    self.db.rename_deck(self.current_deck_id, self.new_deck_name.strip())
+                    self.current_deck_name = self.new_deck_name.strip()
+            return
+        elif getattr(self, 'renaming_deck', False):
+            # Clicked outside while renaming, save and exit
+            self.renaming_deck = False
+            if hasattr(self, 'new_deck_name') and self.new_deck_name.strip():
+                self.db.rename_deck(self.current_deck_id, self.new_deck_name.strip())
+                self.current_deck_name = self.new_deck_name.strip()
+    
         # Toolbar
-        tby = SH - TOOLBAR_H // 2
-        for cx, lbl in self._toolbar_btns():
-            if _in_rect(x, y, cx - 55, tby - 16, cx + 55, tby + 16):
-                if "Atrás"   in lbl: self._go_back()
+        for btn in self.tb_objs:
+            if btn.contains(x, y):
+                lbl = btn.label
+                if "Regresar" in lbl: self._go_back()
                 elif "Guardar" in lbl: self._save_deck()
                 elif "Nuevo"  in lbl: self._new_deck()
+                elif "Mis Decks" in lbl: self._open_deck_list()
                 return
 
-        # Search box focus
-        sx, sy = PAD, AVAIL_YTOP + 12
-        if _in_rect(x, y, sx, sy, sx + 280, sy + 32):
+        # --- Interaction for Panel 1 (Available Cards) ---
+        h1_y = P1_Y2 - 30
+        sbw = 240
+        sx = P1_X1 + (P1_X2 - P1_X1) // 2 - sbw // 2
+        
+        # Search box focus Panel 1
+        if _in_rect(x, y, sx, h1_y - 16, sx + sbw, h1_y + 16):
             self.search_active = True
+            self.deck_search_active = False
             return
-        self.search_active = False
+            
+        # Filter clicks Panel 1
+        for code, btn in self.p1_f_objs.items():
+            if btn.contains(x, y):
+                self.type_filter = "ALL" if self.type_filter == code else code
+                self.avail_scroll = 0
+                self.update_avail_display()
+                return
 
-        # Type filter pills
-        fx = sx + 280 + 16
-        for code, _, w in [("ALL", "", 68), ("MONSTER", "", 90),
-                            ("SPELL", "", 72), ("TRAP", "", 72),
-                            ("NO_IMG", "", 90)]:
-            if _in_rect(x, y, fx, sy, fx + w, sy + 32):
-                if self.type_filter != code:
-                    self.type_filter  = code
+        # --- Interaction for Panel 2 (Current Deck) ---
+        h2_y = P2_Y2 - 25
+        tsx = P2_X1 + (P2_X2 - P2_X1) // 2 - sbw // 2
+        
+        # Search box focus Panel 2
+        if _in_rect(x, y, tsx, h2_y - 16, tsx + sbw, h2_y + 16):
+            self.deck_search_active = True
+            self.search_active = False
+            return
+            
+        # Filter clicks Panel 2
+        for code, btn in self.p2_f_objs.items():
+            if btn.contains(x, y):
+                self.deck_type_filter = "ALL" if self.deck_type_filter == code else code
+                self.deck_scroll = 0
+                self.update_deck_display()
+                return
+
+        self.search_active = False
+        self.deck_search_active = False
+
+        # --- Sub-filter clicks Panel 1 ---
+        if self.type_filter == 'MONSTER':
+            for key, btn in self.p1_sub_objs.items():
+                if btn.contains(x, y):
+                    if key in ["DARK", "LIGHT", "EARTH", "WATER", "FIRE", "WIND"]:
+                        self.attr_filter = "ALL" if self.attr_filter == key else key
+                    else:
+                        self.subtype_filter = "ALL" if self.subtype_filter == key else key
                     self.avail_scroll = 0
                     self.update_avail_display()
-                return
-            fx += w + 8
+                    return
 
-        # Available cards — left click adds to deck
+        # --- Sub-filter clicks Panel 2 ---
+        if self.deck_type_filter == 'MONSTER':
+            for key, btn in self.p2_sub_objs.items():
+                if btn.contains(x, y):
+                    if key in ["DARK", "LIGHT", "EARTH", "WATER", "FIRE", "WIND"]:
+                        self.deck_attr_filter = "ALL" if self.deck_attr_filter == key else key
+                    else:
+                        self.deck_subtype_filter = "ALL" if self.deck_subtype_filter == key else key
+                    self.deck_scroll = 0
+                    self.update_deck_display()
+                    return
+
+        # Iniciar drag & drop para cartas
         av = arcade.get_sprites_at_point((x, y), self.avail_sprites)
+        dk = arcade.get_sprites_at_point((x, y), self.deck_sprites)
+        
         if av and button == arcade.MOUSE_BUTTON_LEFT and self.current_deck_id:
-            if self.db.add_card_to_deck(self.current_deck_id,
-                                        av[-1].card_data['cid']):
-                self.load_deck()
-                self.update_deck_display()
+            self.drag_sprite = av[-1]
+            self.drag_source = 'avail'
+            self.drag_start_x = x
+            self.drag_start_y = y
+            self.drag_ghost_x = x
+            self.drag_ghost_y = y
             return
 
-        # Deck cards — left click removes one copy
-        dk = arcade.get_sprites_at_point((x, y), self.deck_sprites)
         if dk and button == arcade.MOUSE_BUTTON_LEFT and self.current_deck_id:
-            self.db.remove_card_from_deck(self.current_deck_id,
-                                          dk[-1].card_data['cid'])
-            self.load_deck()
-            self.update_deck_display()
+            self.drag_sprite = dk[-1]
+            self.drag_source = 'deck'
+            self.drag_start_x = x
+            self.drag_start_y = y
+            self.drag_ghost_x = x
+            self.drag_ghost_y = y
+            return
+
+    def on_mouse_release(self, x, y, button, modifiers):
+        if getattr(self, 'drag_sprite', None) and button == arcade.MOUSE_BUTTON_LEFT:
+            dx = x - self.drag_start_x
+            dy = y - self.drag_start_y
+            dist = (dx**2 + dy**2)**0.5
+            
+            in_deck_area = _in_rect(x, y, P2_X1, P2_Y1, P2_X2, P2_Y2)
+            cid = self.drag_sprite.card_data['cid']
+            
+            if dist < 10:  # Fue un clic
+                if self.drag_source == 'avail':
+                    if self.db.add_card_to_deck(self.current_deck_id, cid):
+                        self.load_deck()
+                        self.update_deck_display()
+                elif self.drag_source == 'deck':
+                    self.db.remove_card_from_deck(self.current_deck_id, cid)
+                    self.load_deck()
+                    self.update_deck_display()
+            else:  # Fue un arrastre (Drag & Drop)
+                if self.drag_source == 'avail' and in_deck_area:
+                    if self.db.add_card_to_deck(self.current_deck_id, cid):
+                        self.load_deck()
+                        self.update_deck_display()
+                elif self.drag_source == 'deck' and not in_deck_area:
+                    self.db.remove_card_from_deck(self.current_deck_id, cid)
+                    self.load_deck()
+                    self.update_deck_display()
+                    
+            self.drag_sprite = None
+            self._recalc_hover()
 
     def on_mouse_scroll(self, x, y, scroll_x, scroll_y):
-        if _in_rect(x, y, 0, AVAIL_YBOT, AVAIL_W, SH - TOOLBAR_H):
-            filtered   = self.get_filtered()
-            total_rows = (len(filtered) + COLS - 1) // COLS
-            max_scroll = max(0, total_rows - 3)
+        if _in_rect(x, y, P1_X1, P1_Y1, P1_X2, P1_Y2):
+            HEADER_H = 100
+            CARD_STEP_X = CW + 12
+            CARD_STEP_Y = CH + 15
+            usable_w = (P1_X2 - P1_X1) - PAD * 2
+            usable_h = (P1_Y2 - P1_Y1) - HEADER_H - PAD
+            max_cols = int(usable_w // CARD_STEP_X)
+            max_rows = int(usable_h // CARD_STEP_Y)
+            cards_per_page = max_cols * max_rows
+            max_scroll = max(0, (len(self.get_filtered()) + max(1, cards_per_page) - 1) // max(1, cards_per_page))
+            
             delta = -1 if scroll_y > 0 else 1
             self.avail_scroll = max(0, min(max_scroll, self.avail_scroll + delta))
             self.update_avail_display()
-        elif _in_rect(x, y, 0, 0, AVAIL_W, DECK_H):
-            stats_w    = 360
-            max_cols   = (AVAIL_W - stats_w - PAD) // CARD_STEP
-            max_scroll = max(0, len(self.deck_cards_data) - max_cols)
+        elif _in_rect(x, y, P2_X1, P2_Y1, P2_X2, P2_Y2):
+            DECK_CARD_SCALE = 1.45
+            DCW = CW * DECK_CARD_SCALE
+            CARD_STEP_X = DCW + 5
+            max_cols   = int(((P2_X2 - P2_X1) - PAD * 2 - STATS_W) // CARD_STEP_X)
+            max_rows   = 1
+            cards_per_page = max_cols * max_rows
+            
+            max_scroll = max(0, len(self.deck_cards_data) - cards_per_page)
+            
             delta = -1 if (scroll_x > 0 or scroll_y < 0) else 1
             self.deck_scroll = max(0, min(max_scroll, self.deck_scroll + delta))
             self.update_deck_display()
 
     def on_text(self, text):
+        if getattr(self, 'show_dialog', False):
+            if text.isprintable():
+                self.dialog_input += text
+            return
+
+        if getattr(self, 'renaming_deck', False):
+            if text.isprintable():
+                self.new_deck_name += text
+            return
+            
         if self.search_active:
             self.search_text += text
             self.avail_scroll = 0
             self.update_avail_display()
+        elif self.deck_search_active:
+            self.deck_search_text += text
+            self.deck_scroll = 0
+            self.update_deck_display()
 
     def on_key_press(self, symbol, modifiers):
+        if getattr(self, 'show_dialog', False):
+            if symbol == arcade.key.BACKSPACE:
+                self.dialog_input = self.dialog_input[:-1]
+            elif symbol == arcade.key.ENTER:
+                self._confirm_new_deck()
+            elif symbol == arcade.key.ESCAPE:
+                self.show_dialog = False
+            return
+
+    def on_key_press(self, symbol, modifiers):
+        if getattr(self, 'show_deck_list', False):
+            if symbol == arcade.key.ESCAPE:
+                self.show_deck_list = False
+            return
+
+        if self.show_dialog:
+            if symbol == arcade.key.ENTER:
+                self._confirm_new_deck()
+            elif symbol == arcade.key.ESCAPE:
+                self.show_dialog = False
+            return
+            
         if self.search_active:
             if symbol == arcade.key.BACKSPACE:
                 self.search_text = self.search_text[:-1]
@@ -692,6 +1152,15 @@ class DeckBuilderView(arcade.View):
                 self.update_avail_display()
             elif symbol == arcade.key.ESCAPE:
                 self.search_active = False
+
+        elif self.deck_search_active:
+            if symbol == arcade.key.BACKSPACE:
+                self.deck_search_text = self.deck_search_text[:-1]
+                self.deck_scroll = 0
+                self.update_deck_display()
+            elif symbol == arcade.key.ESCAPE:
+                self.deck_search_active = False
+
         elif symbol == arcade.key.ESCAPE:
             self._go_back()
 
@@ -709,13 +1178,24 @@ class DeckBuilderView(arcade.View):
             print(f"[Deck] '{self.current_deck_name}' — {stats['total']} cartas")
 
     def _new_deck(self):
-        n    = len(self.db.get_all_decks()) + 1
-        name = f"Deck {n}"
-        self.current_deck_id   = self.db.create_deck(name)
+        self.show_dialog = True
+        self.dialog_input = ""
+
+    def _confirm_new_deck(self):
+        name = self.dialog_input.strip()
+        if not name:
+            n = len(self.db.get_all_decks()) + 1
+            name = f"Deck {n}"
+        self.current_deck_id = self.db.create_deck(name)
         self.current_deck_name = name
-        self.deck_scroll       = 0
+        self.deck_scroll = 0
         self.load_deck()
         self.update_deck_display()
+        self.show_dialog = False
+
+    def _open_deck_list(self):
+        self.available_decks = self.db.get_all_decks()
+        self.show_deck_list = True
 
     def on_hide_view(self):
         if self._free_on_exit:

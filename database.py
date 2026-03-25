@@ -2,7 +2,7 @@ import os
 import glob
 import json
 import re
-from sqlalchemy import create_engine, Column, String, Integer, ForeignKey
+from sqlalchemy import create_engine, Column, String, Integer, ForeignKey, Text
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 Base = declarative_base()
@@ -50,6 +50,7 @@ class Card(Base):
     image_name = Column(String)
     image_url  = Column(String)
     card_type  = Column(String, nullable=False)  # 'MONSTER' | 'SPELL' | 'TRAP'
+    effects   = Column(Text, default='[]')       # JSON list de effect keys: '["destroy_all_monsters"]'
 
     __mapper_args__ = {
         'polymorphic_on': card_type,
@@ -64,6 +65,7 @@ class Card(Base):
             'image_name': self.image_name,
             'image_url':  self.image_url,
             'card_type':  self.card_type,
+            'effects':    json.loads(self.effects or '[]'),
         }
 
 
@@ -254,6 +256,15 @@ class DatabaseManager:
             deck = session.query(SavedDeck).filter(SavedDeck.id == deck_id).first()
             if deck:
                 session.delete(deck)
+                session.commit()
+                return True
+            return False
+
+    def rename_deck(self, deck_id, new_name):
+        with self.Session() as session:
+            deck = session.query(SavedDeck).filter(SavedDeck.id == deck_id).first()
+            if deck:
+                deck.name = new_name
                 session.commit()
                 return True
             return False

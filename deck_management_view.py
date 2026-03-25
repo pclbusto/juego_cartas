@@ -1,7 +1,14 @@
-import arcade
-import arcade.gui
-import constants
-from database import DatabaseManager
+from ui_prueba_concepto import ShaderButton, ShaderPanel
+
+# --- Use the same color palette as others ---
+BG      = (26, 26, 26)
+PANEL   = (38, 38, 38)
+SEP     = (60, 60, 60)
+TEXT    = (225, 225, 225)
+GOLD    = (255, 200, 50)
+BLUE    = (30, 130, 255)
+BTN     = (55, 55, 55)
+BTN_ACT = (40, 100, 200)
 
 
 class DeckManagementView(arcade.View):
@@ -12,40 +19,30 @@ class DeckManagementView(arcade.View):
         arcade.set_background_color(arcade.color.DARK_BLUE_GRAY)
 
         self.db = DatabaseManager()
-        self.ui_manager = arcade.gui.UIManager()
-
         self.decks = []
         self.selected_deck_id = None
 
     def setup(self):
         """Initialize the deck management view."""
-        self.ui_manager.enable()
         self.load_decks()
-        self.create_ui()
+        
+        ctx = self.window.ctx
+        # Action Buttons
+        bx = constants.SCREEN_WIDTH - 150
+        by_start = constants.SCREEN_HEIGHT - 100
+        
+        self.btn_edit = ShaderButton(ctx, bx, by_start, 220, 40, "Editar Mazo")
+        self.btn_delete = ShaderButton(ctx, bx, by_start - 60, 220, 40, "Eliminar Mazo")
+        self.btn_back = ShaderButton(ctx, bx, by_start - 120, 220, 40, "Volver al Menú")
+        
+        self.objs = [self.btn_edit, self.btn_delete, self.btn_back]
 
     def load_decks(self):
         """Load all decks from database."""
         self.decks = self.db.get_all_decks()
 
     def create_ui(self):
-        """Create UI elements."""
-        self.ui_manager.clear()
-
-        # Back button at top
-        v_box = arcade.gui.UIBoxLayout(vertical=True, space_between=10)
-
-        back_button = arcade.gui.UIFlatButton(text="Back to Menu", width=200)
-        back_button.on_click = self.on_back_click
-
-        delete_button = arcade.gui.UIFlatButton(text="Delete Selected Deck", width=200)
-        delete_button.on_click = self.on_delete_click
-
-        v_box.add(back_button)
-        v_box.add(delete_button)
-
-        anchor = self.ui_manager.add(arcade.gui.UIAnchorLayout())
-        anchor.add(child=v_box, anchor_x="right", anchor_y="top",
-                   align_x=-20, align_y=-20)
+        pass # Using ShaderButtons manually for better control
 
     def on_draw(self):
         """Render the deck management view."""
@@ -129,22 +126,47 @@ class DeckManagementView(arcade.View):
             font_size=10
         )
 
-        self.ui_manager.draw()
+        # Action buttons
+        for btn in self.objs:
+            btn.draw()
 
     def on_mouse_press(self, x, y, button, modifiers):
-        """Handle mouse clicks on decks."""
+        """Handle mouse clicks."""
         if button == arcade.MOUSE_BUTTON_LEFT:
+            # Check action buttons
+            if self.btn_edit.contains(x, y):
+                self.on_edit_click()
+                return
+            if self.btn_delete.contains(x, y):
+                self.on_delete_click(None)
+                return
+            if self.btn_back.contains(x, y):
+                self.on_back_click(None)
+                return
+
+            # Check deck selection
             start_y = constants.SCREEN_HEIGHT - 120
             line_height = 60
-
             for idx, deck in enumerate(self.decks):
                 deck_y = start_y - (idx * line_height)
-                # Check if click is within deck bounds
                 if (constants.SCREEN_WIDTH / 2 - 300 < x < constants.SCREEN_WIDTH / 2 + 300
                         and deck_y - 25 < y < deck_y + 25):
                     self.selected_deck_id = deck['id']
                     print(f"Selected deck: {deck['name']}")
                     break
+
+    def on_mouse_motion(self, x, y, dx, dy):
+        for btn in self.objs:
+            btn.on_mouse_motion(x, y)
+
+    def on_edit_click(self):
+        if self.selected_deck_id:
+            from deck_builder_view import DeckBuilderView
+            v = DeckBuilderView(deck_id=self.selected_deck_id)
+            v.setup()
+            self.window.show_view(v)
+        else:
+            print("No deck selected to edit")
 
     def on_delete_click(self, event):
         """Delete the selected deck."""
@@ -178,4 +200,4 @@ class DeckManagementView(arcade.View):
 
     def on_hide_view(self):
         """Clean up when leaving view."""
-        self.ui_manager.disable()
+        pass

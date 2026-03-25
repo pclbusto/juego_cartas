@@ -73,6 +73,11 @@ FREE_ON_EXIT_OPTIONS = [
     ("1", "Liberar al salir",     "GPU libre al volver al menú"),
 ]
 
+RES_OPTIONS = [
+    ("1280x720",  "HD",      "1280 x 720"),
+    ("1920x1080", "FHD",     "1920 x 1080"),
+    ("2560x1080", "2K 21:9", "2560 x 1080"),
+]
 
 class OptionsView(arcade.View):
 
@@ -82,10 +87,12 @@ class OptionsView(arcade.View):
         self.mx = self.my = 0
         self._thumb_val   = None   # current db value for thumb_limit
         self._free_val    = "0"    # current db value for free_on_exit
+        self._res_val     = "1280x720"
 
     def on_show_view(self):
         self._thumb_val = self.db.get_setting("thumb_limit", None)
         self._free_val  = self.db.get_setting("free_on_exit", "0")
+        self._res_val   = self.db.get_setting("resolution", "1280x720")
 
     # ── Layout helpers ────────────────────────────────────────────────────────
 
@@ -105,11 +112,20 @@ class OptionsView(arcade.View):
         total = len(FREE_ON_EXIT_OPTIONS) * w + (len(FREE_ON_EXIT_OPTIONS) - 1) * gap
         x0    = SW // 2 - total // 2 + w // 2
         cx    = x0 + i * (w + gap)
-        cy    = SH // 2 - 60
+        cy    = SH // 2 - 30
+        return cx, cy, w, h
+        
+    def _res_btn_rect(self, i):
+        w, h  = 160, 36
+        gap   = 12
+        total = len(RES_OPTIONS) * w + (len(RES_OPTIONS) - 1) * gap
+        x0    = SW // 2 - total // 2 + w // 2
+        cx    = x0 + i * (w + gap)
+        cy    = SH // 2 - 120
         return cx, cy, w, h
 
     def _back_rect(self):
-        return SW // 2, SH // 2 - 160, 160, 38
+        return SW // 2, SH // 2 - 200, 160, 38
 
     # ── Draw ──────────────────────────────────────────────────────────────────
 
@@ -152,7 +168,7 @@ class OptionsView(arcade.View):
                              font_size=8, anchor_x="center")
 
         # ── Free on exit section ──
-        section2_y = SH // 2 - 15
+        section2_y = SH // 2 + 15
         arcade.draw_text("Al salir del Deck Builder",
                          SW // 2, section2_y,
                          TEXT, font_size=14, bold=True, anchor_x="center")
@@ -171,6 +187,26 @@ class OptionsView(arcade.View):
             hint_col = (*GREEN, 200) if active else (*DIM, 180)
             arcade.draw_text(hint, cx, cy - h//2 - 12, hint_col,
                              font_size=8, anchor_x="center")
+
+        # ── Resolution section ──
+        section3_y = SH // 2 - 75
+        arcade.draw_text("Resolución de Pantalla",
+                         SW // 2, section3_y,
+                         TEXT, font_size=14, bold=True, anchor_x="center")
+        arcade.draw_text(
+            "Selecciona el tamaño de la ventana. (Requiere reiniciar el juego).",
+            SW // 2, section3_y - 22,
+            DIM, font_size=10, anchor_x="center"
+        )
+
+        for i, (val, label, hint) in enumerate(RES_OPTIONS):
+            cx, cy, w, h = self._res_btn_rect(i)
+            active  = (self._res_val == val)
+            hovered = _in_rect(self.mx, self.my,
+                               cx - w//2, cy - h//2, cx + w//2, cy + h//2)
+            _draw_btn(cx, cy, w, h, label, hovered=hovered, active=active)
+            hint_col = (*GREEN, 200) if active else (*DIM, 180)
+            arcade.draw_text(hint, cx, cy - h//2 - 12, hint_col, font_size=8, anchor_x="center")
 
         # Back button
         cx, cy, w, h = self._back_rect()
@@ -197,6 +233,14 @@ class OptionsView(arcade.View):
             if _in_rect(x, y, cx - w//2, cy - h//2, cx + w//2, cy + h//2):
                 self._free_val = val
                 self.db.set_setting("free_on_exit", val)
+                return
+
+        # Resolution buttons
+        for i, (val, _, _) in enumerate(RES_OPTIONS):
+            cx, cy, w, h = self._res_btn_rect(i)
+            if _in_rect(x, y, cx - w//2, cy - h//2, cx + w//2, cy + h//2):
+                self._res_val = val
+                self.db.set_setting("resolution", val)
                 return
 
         # Back

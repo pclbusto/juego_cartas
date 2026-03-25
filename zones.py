@@ -2,12 +2,13 @@ import arcade
 import constants
 
 class Zone:
-    def __init__(self, name, x, y, max_capacity):
+    def __init__(self, name, x, y, max_capacity, owner="Player"):
         self.name = name
         self.x = x
         self.y = y
         self.max_capacity = max_capacity
         self.cards = []  # Lista de cartas actualmente en esta zona
+        self.owner = owner
 
     def add_card(self, card):
         if len(self.cards) < self.max_capacity:
@@ -35,28 +36,47 @@ class Zone:
         return left <= x <= right and bottom <= y <= top
 
 class BoardManager:
-    """ Gestiona todas las zonas de un jugador """
-    def __init__(self):
+    """ Gestiona todas las zonas del campo """
+    def __init__(self, board_cx, board_cy, step_x, step_y):
         self.zones = []
         
-        # Instanciar zonas de monstruos
-        for i, x in enumerate(constants.ZONE_X_POSITIONS):
-            self.zones.append(Zone(f"Monster {i+1}", x, constants.MONSTER_ZONE_Y, 1))
-            
-        # Instanciar zonas de magia/trampa
-        for i, x in enumerate(constants.ZONE_X_POSITIONS):
-            self.zones.append(Zone(f"Spell/Trap {i+1}", x, constants.SPELL_TRAP_ZONE_Y, 1))
-            
-        # Instanciar zonas de péndulo
-        self.zones.append(Zone("Pendulum Left", constants.PENDULUM_LEFT_X, constants.PENDULUM_Y, 1))
-        self.zones.append(Zone("Pendulum Right", constants.PENDULUM_RIGHT_X, constants.PENDULUM_Y, 1))
+        def add_z(name, col_off, row_off, cap, owner):
+            # col_off from -3 to +3
+            # row_off from -2 to +2
+            zx = board_cx + col_off * step_x
+            zy = board_cy + row_off * step_y
+            self.zones.append(Zone(name, zx, zy, cap, owner))
+
+        # ── OPPONENT (Top) ──
+        # S/T + Deck/Extra
+        add_z("Opp Deck", -3, 2, 60, "Opponent")
+        for i in range(5):
+            add_z(f"Opp S/T {5-i}", -2+i, 2, 1, "Opponent")
+        add_z("Opp Extra", 3, 2, 15, "Opponent")
         
-        # Instanciar Zonas Laterales
-        self.zones.append(Zone("Field", constants.FIELD_ZONE_X, constants.FIELD_ZONE_Y, 1))
-        self.zones.append(Zone("Extra Deck", constants.EXTRA_DECK_X, constants.EXTRA_DECK_Y, float('inf')))
-        self.zones.append(Zone("GY", constants.GRAVEYARD_X, constants.GRAVEYARD_Y, float('inf')))
-        self.zones.append(Zone("Deck", constants.DECK_X, constants.DECK_Y, 60)) # Limite de deck
-        
+        # Monsters + Field/GY
+        add_z("Opp Field", -3, 1, 1, "Opponent")
+        for i in range(5):
+            add_z(f"Opp Mon {5-i}", -2+i, 1, 1, "Opponent")
+        add_z("Opp GY", 3, 1, float('inf'), "Opponent")
+
+        # ── EMZ (Center) ──
+        add_z("EMZ L", -1.2, 0, 1, "Shared")
+        add_z("EMZ R",  1.2, 0, 1, "Shared")
+
+        # ── PLAYER (Bottom) ──
+        # Monsters + Field/GY
+        add_z("Player Field", -3, -1, 1, "Player")
+        for i in range(5):
+            add_z(f"Player Mon {i+1}", -2+i, -1, 1, "Player")
+        add_z("Player GY", 3, -1, float('inf'), "Player")
+
+        # S/T + Deck/Extra
+        add_z("Player Extra", -3, -2, 15, "Player")
+        for i in range(5):
+            add_z(f"Player S/T {i+1}", -2+i, -2, 1, "Player")
+        add_z("Player Deck", 3, -2, 60, "Player")
+
     def get_zone_at(self, x, y):
         """ Retorna la zona debajo del ratón si no está llena """
         for zone in self.zones:

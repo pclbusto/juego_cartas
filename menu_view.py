@@ -1,5 +1,6 @@
 import arcade
 import constants
+from ui_prueba_concepto import ShaderButton, ShaderPanel
 
 SW = constants.SCREEN_WIDTH
 SH = constants.SCREEN_HEIGHT
@@ -17,42 +18,7 @@ BTN_HOV = (70, 70, 70)
 BTN_ACT = (40, 100, 200)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _in_rect(x, y, x1, y1, x2, y2):
-    return x1 <= x <= x2 and y1 <= y <= y2
-
-
-def _rrect_filled(x1, y1, x2, y2, r, color):
-    r = min(r, (x2 - x1) // 2, (y2 - y1) // 2)
-    arcade.draw_lrbt_rectangle_filled(x1 + r, x2 - r, y1, y2, color)
-    arcade.draw_lrbt_rectangle_filled(x1, x2, y1 + r, y2 - r, color)
-    for cx, cy in [(x1+r, y1+r), (x2-r, y1+r), (x1+r, y2-r), (x2-r, y2-r)]:
-        arcade.draw_circle_filled(cx, cy, r, color)
-
-
-def _rrect_outline(x1, y1, x2, y2, r, color, lw=1):
-    r = min(r, (x2 - x1) // 2, (y2 - y1) // 2)
-    arcade.draw_line(x1 + r, y1,  x2 - r, y1,  color, lw)
-    arcade.draw_line(x1 + r, y2,  x2 - r, y2,  color, lw)
-    arcade.draw_line(x1, y1 + r,  x1, y2 - r,  color, lw)
-    arcade.draw_line(x2, y1 + r,  x2, y2 - r,  color, lw)
-    d = r * 2
-    arcade.draw_arc_outline(x1+r, y1+r, d, d, color, 180, 270, lw)
-    arcade.draw_arc_outline(x2-r, y1+r, d, d, color, 270, 360, lw)
-    arcade.draw_arc_outline(x2-r, y2-r, d, d, color,   0,  90, lw)
-    arcade.draw_arc_outline(x1+r, y2-r, d, d, color,  90, 180, lw)
-
-
-def _draw_btn(cx, cy, w, h, label, hovered=False, active=False):
-    x1, x2 = cx - w // 2, cx + w // 2
-    y1, y2 = cy - h // 2, cy + h // 2
-    bg = BTN_ACT if active else (BTN_HOV if hovered else BTN)
-    _rrect_filled(x1, y1, x2, y2, 7, bg)
-    border = (*BLUE, 180) if active else (*SEP, 120)
-    _rrect_outline(x1, y1, x2, y2, 7, border, 1)
-    arcade.draw_text(label, cx, cy, TEXT, font_size=13,
-                     anchor_x="center", anchor_y="center")
+# --- Legacy drawing helpers removed, using ShaderButton ---
 
 
 # ── View ──────────────────────────────────────────────────────────────────────
@@ -77,7 +43,13 @@ class MenuView(arcade.View):
         self.mx = self.my = 0
 
     def on_show_view(self):
-        pass
+        ctx = self.window.ctx
+        self.objs = []
+        for action, label, cx, cy in self._btn_positions():
+            btn = ShaderButton(ctx, cx, cy, BTN_W, BTN_H, label)
+            # Guardamos la acción en el objeto para facilitar el click
+            btn.action = action
+            self.objs.append(btn)
 
     def _btn_positions(self):
         """Returns list of (action, label, cx, cy)."""
@@ -126,21 +98,18 @@ class MenuView(arcade.View):
         arcade.draw_line(lx1, logo_y, lx2, logo_y, (*SEP, 80), 1)
 
         # Buttons
-        for action, label, cx, cy in self._btn_positions():
-            hov = _in_rect(self.mx, self.my,
-                           cx - BTN_W // 2, cy - BTN_H // 2,
-                           cx + BTN_W // 2, cy + BTN_H // 2)
-            _draw_btn(cx, cy, BTN_W, BTN_H, label, hovered=hov)
+        for btn in self.objs:
+            btn.draw()
 
     def on_mouse_motion(self, x, y, dx, dy):
         self.mx, self.my = x, y
+        for btn in self.objs:
+            btn.on_mouse_motion(x, y)
 
     def on_mouse_press(self, x, y, button, modifiers):
-        for action, label, cx, cy in self._btn_positions():
-            if _in_rect(x, y,
-                        cx - BTN_W // 2, cy - BTN_H // 2,
-                        cx + BTN_W // 2, cy + BTN_H // 2):
-                self._dispatch(action)
+        for btn in self.objs:
+            if btn.contains(x, y):
+                self._dispatch(btn.action)
                 return
 
     def _dispatch(self, action):
