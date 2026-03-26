@@ -211,6 +211,8 @@ class DeckBuilderView(arcade.View):
         self._DETAIL_LIMIT     = 20
         self._free_on_exit     = False  # set from DB in setup()
         self.mx = self.my      = 0
+        self.lang              = "en"
+        self.available_langs   = ["en", "es"] # Fallback, will be updated in setup()
 
         # New deck dialog state
         self.show_dialog = False
@@ -224,6 +226,11 @@ class DeckBuilderView(arcade.View):
         self.dialog_panel = ShaderPanel(ctx, SW // 2, SH // 2, 400, 200, title="Nuevo Mazo")
         self.btn_ok = ShaderButton(ctx, SW // 2 - 80, SH // 2 - 40, 120, 40, "Crear")
         self.btn_cancel = ShaderButton(ctx, SW // 2 + 80, SH // 2 - 40, 120, 40, "Cancelar")
+        
+        # New copy button for details panel
+        self.btn_copy = ShaderButton(ctx, P3_X2 - 60, P3_Y2 - 30, 80, 28, "Copiar")
+        self.btn_copy.radius = 5
+        self.btn_copy.font_size = 10
 
     def setup(self):
         # Dedicated atlas: capacity=4 → 16 384 UV slots; auto_resize handles pixel growth
@@ -240,7 +247,13 @@ class DeckBuilderView(arcade.View):
         self._THUMB_LIMIT  = int(raw_limit) if raw_limit is not None else None
         self._free_on_exit = self.db.get_setting("free_on_exit", "0") == "1"
 
-        self.all_cards = self.db.get_cards()
+        self.all_cards = self.db.get_cards(lang=self.lang)
+        self.available_langs = self.db.get_available_languages()
+        
+        # If Spanish is available, start with it (as requested in Spanish context)
+        if "es" in self.available_langs:
+            self.lang = "es"
+            self.all_cards = self.db.get_cards(lang=self.lang)
 
         decks = self.db.get_all_decks()
         if self.current_deck_id is None and decks:
@@ -351,11 +364,15 @@ class DeckBuilderView(arcade.View):
             self.p2_sub_objs[stype] = btn
             smx += smw + gap
 
+        # Language button
+        self.btn_lang = ShaderButton(ctx, SW - PAD - 715, SH - TOP_BAR_H // 2, 80, 36, f"Lang: {self.lang.upper()}")
+        self.tb_objs.append(self.btn_lang)
+
     # ── Data ──────────────────────────────────────────────────────────────────
 
     def load_deck(self):
         self.deck_cards_data = (
-            self.db.get_deck_cards(self.current_deck_id)
+            self.db.get_deck_cards(self.current_deck_id, lang=self.lang)
             if self.current_deck_id else []
         )
 
@@ -750,6 +767,7 @@ class DeckBuilderView(arcade.View):
 
         # Header "Card Details"
         arcade.draw_text("Card Details", P3_X1 + PAD, P3_Y2 - 30, TEXT, font_size=16, bold=True, anchor_y="center")
+        self.btn_copy.draw()
         arcade.draw_line(P3_X1, P3_Y2 - 60, P3_X2, P3_Y2 - 60, (*PANEL_OUTLINE, 200), 1)
 
         if not self.detail_card:
@@ -867,6 +885,9 @@ class DeckBuilderView(arcade.View):
         for btn in self.p2_f_objs.values(): btn.on_mouse_motion(x, y)
         if self.deck_type_filter == 'MONSTER':
             for btn in self.p2_sub_objs.values(): btn.on_mouse_motion(x, y)
+        
+        if getattr(self, 'btn_copy', None):
+            self.btn_copy.on_mouse_motion(x, y)
             
         if getattr(self, 'show_dialog', False) or getattr(self, 'show_deck_list', False):
             if getattr(self, 'btn_ok', None):
@@ -954,7 +975,12 @@ class DeckBuilderView(arcade.View):
                 elif "Guardar" in lbl: self._save_deck()
                 elif "Nuevo"  in lbl: self._new_deck()
                 elif "Mis Decks" in lbl: self._open_deck_list()
+                elif "Lang:" in lbl: self._change_lang()
                 return
+
+        if getattr(self, 'btn_copy', None) and self.btn_copy.contains(x, y):
+            self._copy_card_info()
+            return
 
         # --- Interaction for Panel 1 (Available Cards) ---
         h1_y = P1_Y2 - 30
@@ -1163,6 +1189,9 @@ class DeckBuilderView(arcade.View):
 
         elif symbol == arcade.key.ESCAPE:
             self._go_back()
+        
+        elif symbol == arcade.key.C and (modifiers & arcade.key.MOD_CTRL):
+            self._copy_card_info()
 
     # ── Actions ───────────────────────────────────────────────────────────────
 
@@ -1193,9 +1222,57 @@ class DeckBuilderView(arcade.View):
         self.update_deck_display()
         self.show_dialog = False
 
+    def _change_lang(self):
+        # Cycle through available languages
+        idx = self.available_langs.index(self.lang)
+        self.lang = self.available_langs[(idx + 1) % len(self.available_langs)]
+        
+        # Update button label
+        for btn in self.tb_objs:
+            if "Lang:" in btn.label:
+                btn.label = f"Lang: {self.lang.upper()}"
+                break
+        
+        # Reload all data
+        self.all_cards = self.db.get_cards(lang=self.lang)
+        self.load_deck()
+        self.update_avail_display()
+        self.update_deck_display()
+        
+        # Invalidate detail card to force reload with new language if it's open
+        if self.detail_card:
+            cid = self.detail_card['cid']
+            # Find the updated card data
+            new_data = next((c for c in self.all_cards if c['cid'] == cid), None)
+            if new_data:
+                self.detail_card = new_data
+
     def _open_deck_list(self):
         self.available_decks = self.db.get_all_decks()
         self.show_deck_list = True
+
+    def _copy_card_info(self):
+        if not self.detail_card:
+            return
+        
+        card = self.detail_card
+        text = f"{card.get('name', '')}\n{card.get('attribute', '')} | {card.get('level', '')} | {card.get('type', '')}\n{card.get('text', '')}"
+        
+        try:
+            # Intentar usar Gdk si está disponible
+            from gi.repository import Gdk
+            display = Gdk.Display.get_default()
+            if display:
+                clipboard = display.get_clipboard()
+                clipboard.set(text)
+        except Exception:
+            # Fallback muy básico usando xclip en Linux o simplemente imprimiendo
+            import subprocess
+            try:
+                process = subprocess.Popen(['xclip', '-selection', 'clipboard'], stdin=subprocess.PIPE)
+                process.communicate(text.encode('utf-8'))
+            except:
+                print(f"[CLIPBOARD] Fallback print:\n{text}")
 
     def on_hide_view(self):
         if self._free_on_exit:

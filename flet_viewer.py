@@ -17,7 +17,11 @@ def main(page: ft.Page):
 
     db = DatabaseManager(DB_FILE)
     db.init_db(JSON_FILE)
-    all_cards = db.get_cards()
+    
+    # Language state
+    available_langs = db.get_available_languages()
+    current_lang = "es" if "es" in available_langs else "en"
+    all_cards = db.get_cards(lang=current_lang)
 
     if not os.path.exists(IMAGES_DIR):
         os.makedirs(IMAGES_DIR)
@@ -47,6 +51,23 @@ def main(page: ft.Page):
         width=200
     )
     deck_dropdown.on_change = on_deck_change
+
+    # Language Selector
+    def on_lang_change(e):
+        nonlocal current_lang, all_cards
+        current_lang = lang_dropdown.value
+        all_cards = db.get_cards(lang=current_lang)
+        populate_list(browser_list, all_cards)
+        refresh_deck_list()
+        page.update()
+
+    lang_dropdown = ft.Dropdown(
+        label="Language",
+        options=[ft.dropdown.Option(l, l.upper()) for l in available_langs],
+        value=current_lang,
+        width=100
+    )
+    lang_dropdown.on_change = on_lang_change
 
     def on_new_deck(e):
         def close_dlg(e):
@@ -91,8 +112,8 @@ def main(page: ft.Page):
         content=card_image, width=300, height=437, alignment=ft.Alignment(0, 0),
         bgcolor="surfacevariant", border_radius=10, margin=ft.Margin(0, 0, 0, 16)
     )
-    name_label = ft.Text("Select a card", size=24, weight="bold", text_align=ft.TextAlign.CENTER)
-    desc_label = ft.Text("", size=14, text_align=ft.TextAlign.LEFT)
+    name_label = ft.Text("Select a card", size=24, weight="bold", text_align=ft.TextAlign.CENTER, selectable=True)
+    desc_label = ft.Text("", size=14, text_align=ft.TextAlign.LEFT, selectable=True)
     stats_column = ft.Column(spacing=0)
     
     # Action Buttons
@@ -231,7 +252,7 @@ def main(page: ft.Page):
 
     def refresh_deck_list():
         nonlocal deck_cards
-        deck_cards = db.get_deck_cards(current_deck_id)
+        deck_cards = db.get_deck_cards(current_deck_id, lang=current_lang)
         populate_list(deck_list, deck_cards)
         deck_btn.text = f"My Deck ({db.get_deck_card_count(current_deck_id)})"
 
@@ -260,7 +281,7 @@ def main(page: ft.Page):
     refresh_deck_list()
 
     left_panel = ft.Column([
-        ft.Row([deck_dropdown, new_deck_btn], spacing=10),
+        ft.Row([deck_dropdown, new_deck_btn, lang_dropdown], spacing=10),
         tab_row, 
         list_content
     ], expand=True, spacing=10)

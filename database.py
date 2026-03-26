@@ -127,6 +127,16 @@ class TrapCard(Card):
         return d
 
 
+class CardTranslation(Base):
+    __tablename__ = 'card_translations'
+
+    cid     = Column(String, ForeignKey('cards.cid'), primary_key=True)
+    lang    = Column(String(8), primary_key=True)   # 'en', 'es', ...
+    name    = Column(String)
+    text    = Column(Text)
+    subtype = Column(String)
+
+
 class SavedDeck(Base):
     __tablename__ = 'saved_decks'
 
@@ -172,9 +182,10 @@ class DatabaseManager:
         self.engine = create_engine(db_url, echo=False)
         self.Session = sessionmaker(bind=self.engine)
         Base.metadata.create_all(self.engine)
+        self._ensure_translations()
 
     def init_db(self, search_dir='.'):
-        """Scans search_dir for scraper JSON files and upserts any new cards."""
+        """Scans search_dir for scraper JSON files and upserts cards + translations."""
         json_files = glob.glob(os.path.join(search_dir, '*.json'))
         added = 0
         with self.Session() as session:
@@ -184,44 +195,48 @@ class DatabaseManager:
                         cards_data = json.load(f)
                     if not isinstance(cards_data, list):
                         continue
+
+                    lang_match = re.search(r'_([a-z]{2})\.json$', os.path.basename(json_file))
+                    file_lang  = lang_match.group(1) if lang_match else 'en'
+
                     for data in cards_data:
                         if not isinstance(data, dict) or not data.get('cid'):
                             continue
 
                         cid       = data['cid']
                         attr      = data.get('attribute', '')
+                        name      = data.get('name', '')
+                        text      = data.get('text', '')
+                        subtype   = _parse_subtype(data.get('type', ''))
                         base_args = dict(
                             cid        = cid,
-                            name       = data.get('name', ''),
-                            text       = data.get('text', ''),
+                            name       = name,
+                            text       = text,
                             image_name = data.get('image_name', ''),
                             image_url  = data.get('image_url', ''),
                         )
 
-                        if attr == 'SPELL':
-                            card = SpellCard(
-                                **base_args,
-                                card_type = 'SPELL',
-                                subtype   = _parse_subtype(data.get('type', '')),
-                            )
-                        elif attr == 'TRAP':
-                            card = TrapCard(
-                                **base_args,
-                                card_type = 'TRAP',
-                                subtype   = _parse_subtype(data.get('type', '')),
-                            )
+                        attr_upper = attr.upper()
+                        if attr_upper in ('SPELL', 'MÁGICA'):
+                            card = SpellCard(**base_args, card_type='SPELL', subtype=subtype)
+                        elif attr_upper in ('TRAP', 'TRAMPA'):
+                            card = TrapCard(**base_args, card_type='TRAP', subtype=subtype)
                         else:
                             card = MonsterCard(
                                 **base_args,
                                 card_type = 'MONSTER',
                                 attribute = attr,
-                                subtype   = _parse_subtype(data.get('type', '')),
+                                subtype   = subtype,
                                 level     = _parse_level(data.get('level', '')),
                                 atk       = _parse_stat(data.get('atk')),
                                 def_      = _parse_stat(data.get('def')),
                             )
 
                         session.merge(card)
+                        session.merge(CardTranslation(
+                            cid=cid, lang=file_lang,
+                            name=name, text=text, subtype=subtype,
+                        ))
                         added += 1
 
                 except (json.JSONDecodeError, OSError):
@@ -231,10 +246,61 @@ class DatabaseManager:
         if added:
             print(f'[DB] Synced {added} card entries from {len(json_files)} JSON file(s).')
 
-    def get_cards(self):
+    def _ensure_translations(self):
+        """Copia name/text/subtype existentes a card_translations como 'en' si aún no están."""
+        with self.Session() as session:
+            existing = {t.cid for t in session.query(CardTranslation.cid).filter(CardTranslation.lang == 'en')}
+            cards = session.query(Card).all()
+            added = 0
+            for card in cards:
+                if card.cid not in existing:
+                    subtype = getattr(card, 'subtype', None)
+                    session.merge(CardTranslation(
+                        cid=card.cid, lang='en',
+                        name=card.name, text=card.text, subtype=subtype,
+                    ))
+                    added += 1
+            if added:
+                session.commit()
+
+    def get_cards(self, lang='en'):
         with self.Session() as session:
             cards = session.query(Card).order_by(Card.name).all()
-            return [c.to_dict() for c in cards]
+            base_list = [c.to_dict() for c in cards]
+
+            langs_to_fetch = [lang] if lang == 'en' else [lang, 'en']
+            trans_rows = (
+                session.query(CardTranslation)
+                .filter(CardTranslation.lang.in_(langs_to_fetch))
+                .all()
+            )
+
+        # Preferir el lang pedido; caer a 'en' si no hay traducción
+        trans_map: dict = {}
+        for t in trans_rows:
+            if t.cid not in trans_map or t.lang == lang:
+                trans_map[t.cid] = t
+
+        result = []
+        for card in base_list:
+            t = trans_map.get(card['cid'])
+            if t:
+                if t.name:
+                    card['name'] = t.name
+                if t.text:
+                    card['text'] = t.text
+                if t.subtype:
+                    card['type'] = t.subtype
+            result.append(card)
+
+        if lang != 'en':
+            result.sort(key=lambda c: c.get('name', '').lower())
+        return result
+
+    def get_available_languages(self):
+        with self.Session() as session:
+            langs = session.query(CardTranslation.lang).distinct().all()
+            return sorted([l[0] for l in langs])
 
     # ── Decks ──────────────────────────────────────────────────────────────────
 
@@ -309,15 +375,40 @@ class DatabaseManager:
                 return True
             return False
 
-    def get_deck_cards(self, deck_id):
+    def get_deck_cards(self, deck_id, lang='en'):
         with self.Session() as session:
             entries = session.query(DeckEntry).filter(DeckEntry.deck_id == deck_id).all()
+            
+            # Recopilar cids para traducir de una vez
+            cids = [e.card_cid for e in entries if e.card_cid]
+            
+            langs_to_fetch = [lang] if lang == 'en' else [lang, 'en']
+            trans_rows = (
+                session.query(CardTranslation)
+                .filter(CardTranslation.cid.in_(cids), CardTranslation.lang.in_(langs_to_fetch))
+                .all()
+            )
+            
+            # Preferir el lang pedido; caer a 'en' si no hay traducción
+            trans_map: dict = {}
+            for t in trans_rows:
+                if t.cid not in trans_map or t.lang == lang:
+                    trans_map[t.cid] = t
+
             result = []
             for entry in entries:
                 if entry.card:
                     d = entry.card.to_dict()
                     d['quantity']  = entry.quantity
                     d['entry_id']  = entry.id
+                    
+                    # Aplicar traducción si existe
+                    t = trans_map.get(d['cid'])
+                    if t:
+                        if t.name: d['name'] = t.name
+                        if t.text: d['text'] = t.text
+                        if t.subtype: d['type'] = t.subtype
+                        
                     result.append(d)
             return result
 

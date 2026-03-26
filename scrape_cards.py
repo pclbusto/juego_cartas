@@ -9,6 +9,7 @@ def scrape_cards():
     parser.add_argument("--type", type=str, choices=["monster", "spell", "trap"], default="monster", help="Card type to scrape")
     parser.add_argument("--subtype", type=str, help="Subtype (e.g., normal, effect, fusion, ritual, synchro, field, continuous, etc.)")
     parser.add_argument("--limit", type=int, default=-1, help="Number of cards to scrape (default: -1 = all)")
+    parser.add_argument("--lang", type=str, default="en", help="Locale for card names/text: 'en' or 'es' (default: en)")
     args = parser.parse_args()
 
     card_limit = args.limit  # -1 = sin límite
@@ -46,9 +47,10 @@ def scrape_cards():
         # For now, we'll stick to the base ctype provided by the user.
         pass
 
+    lang_header = "es-ES,es;q=0.9,en;q=0.8" if args.lang == 'es' else "en-US,en;q=0.9,es;q=0.8"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9,es;q=0.8"
+        "Accept-Language": lang_header,
     }
 
     cards_data = []
@@ -59,7 +61,7 @@ def scrape_cards():
     while (card_limit == -1 or len(cards_data) < card_limit):
         # Base URL from user request, adapted for parameters
         url = (f"https://www.db.yugioh-card.com/yugiohdb/card_search.action?ope=1&sess=1&rp=100&mode=&sort=1&keyword="
-               f"&stype=1&ctype={type_map[args.type]}{subtype_params}&page={page}")
+               f"&stype=1&ctype={type_map[args.type]}{subtype_params}&page={page}&request_locale={args.lang}")
         
         response = requests.get(url, headers=headers)
         
@@ -135,9 +137,9 @@ def scrape_cards():
 
     print(f"Found {len(cards_data)} cards.")
 
-    output_file = f"{args.type}s.json"
+    output_file = f"{args.type}s_{args.lang}.json"
     if args.subtype:
-        output_file = f"{args.subtype}_{args.type}s.json"
+        output_file = f"{args.subtype}_{args.type}s_{args.lang}.json"
 
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(cards_data, f, ensure_ascii=False, indent=4)

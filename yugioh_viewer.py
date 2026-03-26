@@ -42,6 +42,12 @@ class YgoViewerWindow(Adw.ApplicationWindow):
         self.set_default_size(settings.get("width", 900), settings.get("height", 600))
         self.connect("close-request", self._on_close)
         self.cards = cards
+        self.db = DatabaseManager()
+        self.lang = "es" if "es" in self.db.get_available_languages() else "en"
+        
+        # Reload cards with correct initial language if needed
+        if self.lang != "en":
+            self.cards = self.db.get_cards(lang=self.lang)
 
         if not os.path.exists(IMAGES_DIR):
             os.makedirs(IMAGES_DIR)
@@ -93,6 +99,25 @@ class YgoViewerWindow(Adw.ApplicationWindow):
         
         header.pack_end(self.main_menu_btn)
         header.pack_end(self.info_btn)
+
+        # Language Selection Button
+        self.lang_btn = Gtk.MenuButton(icon_name="locale-symbolic")
+        self.lang_btn.set_tooltip_text("Cambiar idioma")
+        lang_popover = Gtk.Popover()
+        lang_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        lang_box.set_margin_top(8)
+        lang_box.set_margin_bottom(8)
+        lang_box.set_margin_start(8)
+        lang_box.set_margin_end(8)
+        
+        for lcode in self.db.get_available_languages():
+            lbtn = Gtk.Button(label=lcode.upper())
+            lbtn.connect("clicked", self._on_lang_clicked, lcode)
+            lang_box.append(lbtn)
+            
+        lang_popover.set_child(lang_box)
+        self.lang_btn.set_popover(lang_popover)
+        header.pack_end(self.lang_btn)
 
         # Filter button in header
         self.active_filters = {
@@ -190,12 +215,24 @@ class YgoViewerWindow(Adw.ApplicationWindow):
         info_box.set_margin_end(24)
 
         self.name_label = Gtk.Label()
+        self.name_label.set_selectable(True)
         self.name_label.add_css_class("title-1")
         self.name_label.set_wrap(True)
         self.name_label.set_halign(Gtk.Align.START)
         self.name_label.set_justify(Gtk.Justification.LEFT)
 
         self.stats_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self._stat_val_labels = []
+        for _icon, _lbl in [
+            ("tag-symbolic",                 "Atributo"),
+            ("starred-symbolic",             "Nivel"),
+            ("document-properties-symbolic", "Tipo"),
+            ("go-up-symbolic",               "ATK"),
+            ("go-down-symbolic",             "DEF"),
+        ]:
+            _row, _val = self._make_stat_row_reusable(_icon, _lbl, "-")
+            self.stats_box.append(_row)
+            self._stat_val_labels.append(_val)
 
         # Description with card-style background
         desc_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -207,6 +244,7 @@ class YgoViewerWindow(Adw.ApplicationWindow):
         desc_inner.set_margin_end(12)
 
         self.desc_label = Gtk.Label()
+        self.desc_label.set_selectable(True)
         self.desc_label.set_wrap(True)
         self.desc_label.set_halign(Gtk.Align.START)
         self.desc_label.set_justify(Gtk.Justification.LEFT)
@@ -233,6 +271,8 @@ class YgoViewerWindow(Adw.ApplicationWindow):
         self.executor = ThreadPoolExecutor(max_workers=5)
         self.downloading_cids = set()
         self.queue_count = 0
+        self._current_cid = None
+        self.search_timeout_id = None
 
         # Populate list
         for card in self.cards:
@@ -248,6 +288,39 @@ class YgoViewerWindow(Adw.ApplicationWindow):
 
         if self.cards:
             self.listbox.select_row(self.listbox.get_row_at_index(0))
+
+    def _on_lang_clicked(self, btn, lcode):
+        if self.lang == lcode:
+            return
+        self.lang = lcode
+        self.lang_btn.get_popover().popdown()
+        
+        # Reload and refresh
+        self.cards = self.db.get_cards(lang=self.lang)
+        self._refresh_ui_after_lang_change()
+
+    def _refresh_ui_after_lang_change(self):
+        # Clear listbox
+        while (row := self.listbox.get_first_child()):
+            self.listbox.remove(row)
+            
+        # Re-populate
+        for card in self.cards:
+            level = card.get('level')
+            row = Adw.ActionRow(
+                title=card['name'],
+                subtitle=f"{card.get('attribute', '-')} | {level if level is not None else '-'}"
+            )
+            row.card_data = card
+            self.listbox.append(row)
+            
+        # Select first
+        if self.cards:
+            self.listbox.select_row(self.listbox.get_row_at_index(0))
+        
+        # Re-initialize popovers if they depend on card list (filters specifically)
+        self.filter_btn.set_popover(self._build_filter_popover())
+        self._refresh_info_panel()
 
     # ── Filter ────────────────────────────────────────────────────────────────
 
@@ -393,7 +466,20 @@ class YgoViewerWindow(Adw.ApplicationWindow):
         box.append(spin_max)
         return box
 
-    def _on_filter_changed(self, _widget=None):
+    def _on_filter_changed(self, widget=None):
+        # Debounce search entry changes to 2 seconds
+        if self.search_timeout_id:
+            GLib.source_remove(self.search_timeout_id)
+            self.search_timeout_id = None
+
+        if widget is self.search_entry:
+            self.search_timeout_id = GLib.timeout_add(2000, self._do_filter)
+        else:
+            # Immediate for other filters (buttons, spinbuttons)
+            self._do_filter()
+
+    def _do_filter(self):
+        self.search_timeout_id = None
         self.active_filters['main_types'] = {
             k for k, b in self.filter_type_btns.items() if b.get_active()
         }
@@ -403,18 +489,20 @@ class YgoViewerWindow(Adw.ApplicationWindow):
         self.active_filters['subtypes'] = {
             k for k, b in self.filter_subtype_btns.items() if b.get_active()
         }
-        self.active_filters['no_image'] = self.filter_no_img_btn.get_active()
+        self.active_filters['no_image'] = getattr(self, 'filter_no_img_btn', None) and self.filter_no_img_btn.get_active()
 
         for key in ('level', 'atk', 'def'):
-            v_min = int(getattr(self, f"spin_{key}_min").get_value())
-            v_max = int(getattr(self, f"spin_{key}_max").get_value())
-            d_min = getattr(self, f"spin_{key}_min_default")
-            d_max = getattr(self, f"spin_{key}_max_default")
-            self.active_filters[f'{key}_min'] = None if v_min == d_min else v_min
-            self.active_filters[f'{key}_max'] = None if v_max == d_max else v_max
+            if hasattr(self, f"spin_{key}_min"):
+                v_min = int(getattr(self, f"spin_{key}_min").get_value())
+                v_max = int(getattr(self, f"spin_{key}_max").get_value())
+                d_min = getattr(self, f"spin_{key}_min_default")
+                d_max = getattr(self, f"spin_{key}_max_default")
+                self.active_filters[f'{key}_min'] = None if v_min == d_min else v_min
+                self.active_filters[f'{key}_max'] = None if v_max == d_max else v_max
 
         self.listbox.invalidate_filter()
         self._update_filter_button()
+        return False  # Stop the timeout
 
     def _filter_func(self, row):
         if not hasattr(row, 'card_data'):
@@ -596,6 +684,39 @@ class YgoViewerWindow(Adw.ApplicationWindow):
 
     # ── Card selection ────────────────────────────────────────────────────────
 
+    def _make_stat_row_reusable(self, icon_name, label, value):
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row.set_margin_top(3)
+        row.set_margin_bottom(3)
+        icon = Gtk.Image.new_from_icon_name(icon_name)
+        icon.set_pixel_size(16)
+        icon.add_css_class("dim-label")
+        lbl = Gtk.Label(label=label)
+        lbl.add_css_class("dim-label")
+        lbl.set_halign(Gtk.Align.START)
+        val_lbl = Gtk.Label(label=str(value))
+        val_lbl.set_selectable(True)
+        val_lbl.set_hexpand(True)
+        val_lbl.set_halign(Gtk.Align.END)
+        val_lbl.set_wrap(True)
+        row.append(icon)
+        row.append(lbl)
+        row.append(val_lbl)
+        return row, val_lbl
+
+    def _load_image_async(self, image_path, cid):
+        try:
+            from gi.repository import Gdk
+            texture = Gdk.Texture.new_from_filename(image_path)
+            GLib.idle_add(self._set_image, texture, cid)
+        except Exception as e:
+            print(f"Error loading image {image_path}: {e}")
+
+    def _set_image(self, texture, cid):
+        if self._current_cid == cid:
+            self.card_image.set_paintable(texture)
+        return False
+
     def _make_stat_row(self, icon_name, label, value):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         row.set_margin_top(3)
@@ -610,6 +731,7 @@ class YgoViewerWindow(Adw.ApplicationWindow):
         lbl.set_halign(Gtk.Align.START)
 
         val_lbl = Gtk.Label(label=str(value))
+        val_lbl.set_selectable(True)
         val_lbl.set_hexpand(True)
         val_lbl.set_halign(Gtk.Align.END)
         val_lbl.set_wrap(True)
@@ -627,31 +749,28 @@ class YgoViewerWindow(Adw.ApplicationWindow):
         self.name_label.set_text(card.get('name', 'Unknown'))
         self.desc_label.set_text(card.get('text', 'No description available.'))
 
-        while self.stats_box.get_first_child():
-            self.stats_box.remove(self.stats_box.get_first_child())
-
         def _fmt(val):
             return str(val) if val is not None else '-'
 
-        stats = [
-            ("tag-symbolic",                 "Atributo", card.get('attribute', '-')),
-            ("starred-symbolic",             "Nivel",    _fmt(card.get('level'))),
-            ("document-properties-symbolic", "Tipo",     card.get('type') or '-'),
-            ("go-up-symbolic",               "ATK",      _fmt(card.get('atk'))),
-            ("go-down-symbolic",             "DEF",      _fmt(card.get('def'))),
-        ]
-        for icon_name, label, value in stats:
-            self.stats_box.append(self._make_stat_row(icon_name, label, value))
+        for val_lbl, value in zip(self._stat_val_labels, [
+            card.get('attribute', '-'),
+            _fmt(card.get('level')),
+            card.get('type') or '-',
+            _fmt(card.get('atk')),
+            _fmt(card.get('def')),
+        ]):
+            val_lbl.set_text(str(value))
 
         cid = card.get('cid')
         image_url = card.get('image_url')
+        self._current_cid = cid
+        self.card_image.set_paintable(None)
         if cid:
             image_path = os.path.join(IMAGES_DIR, f"{cid}.jpg")
             if os.path.exists(image_path):
-                self.card_image.set_filename(image_path)
                 self.status_label.set_text("")
+                self.executor.submit(self._load_image_async, image_path, cid)
             else:
-                self.card_image.set_filename(None)
                 if cid not in self.downloading_cids:
                     self.downloading_cids.add(cid)
                     self.queue_count += 1
